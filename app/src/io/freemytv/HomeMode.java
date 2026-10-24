@@ -78,6 +78,26 @@ final class HomeMode {
         // KTC (NextStar; MediaTek)
         "tv.anoki.acr.controller",                                                    // Anoki ACR: watches what's on screen
         "com.mediatek.tv.retaildemo", "com.electronic.manual",                        // store demo, manual
+        // Amazon Fire TV (Fire OS 7). Its launcher, ad service and most telemetry are protected (pm refuses them).
+        "com.amazon.hybridadidservice", "com.amazon.sneakpeek", "com.amazon.tv.acr",  // ad id, sneak peeks, screen-content recognition (ACR)
+        "com.amazon.shoptv.client", "com.amazon.shoptv.firetv.client",                // shopping
+        "com.amazon.media.recommendations", "com.amazon.tv.easyupgrade",              // promo rows, upgrade nags
+        "com.amazon.kso.blackbird", "com.amazon.tv.website_launcher",                 // ad landing pages
+        "com.amazon.minitv.android.app", "com.amazon.gamehub", "com.amazon.avls.experience", // miniTV, Game Hub, promos
+        "com.amazon.bueller.music", "com.amazon.bueller.photos", "com.amazon.cloud9", // Music, Photos, Silk browser
+        "com.amazon.tahoe", "com.amazon.ods.kindleconnect", "com.amazon.ftv.screensaver", // Kids, Kindle, screensaver
+        "com.amazon.storm.lightning.tutorial", "com.amazon.tmm.tutorial", "com.amazon.tv.releasenotes",
+        "com.amazon.tv.livetv",                                                       // Live TV: its button opens ours (LiveTvActivity)
+        "com.amazon.aca", "com.amazon.ceviche", "com.amazon.whisperplay.service.install",
+        "com.amazon.tv.matter", "com.amazon.tv.mattercohost",                         // smart home
+        "com.amazon.tv.alexaalerts", "com.amazon.tv.alexanotifications",              // Alexa
+        "com.amazon.vizzini", "com.amazon.vizzini.ftvcds",                            // Alexa assistant (back at every boot)
+        "com.amazon.alexa.datastore.app", "com.amazon.alexa.externalmediaplayer.fireos",
+        "com.amazon.alexadirectivebrokerservice", "com.amazon.alexamediaplayer.runtime.ftv",
+        "com.amazon.firetv.androidskillconnectioncapability",
+        "com.amazon.whad", "com.amazon.whasettings", "com.amazon.wha.mediabrowserservice", "com.amazon.audiohome", // multi-room audio
+        "com.amazon.tv.fw.metrics", "com.amazon.wirelessmetrics.service",             // telemetry (back at every boot)
+        "com.amazon.dp.logger", "com.amazon.perfc", "com.amazon.perfcollection", "com.amazon.neo.minerva.logcat",
     };
 
     /** The voice assistant, only with disable_assistant=true in config.properties (the mic button stops working). */
@@ -136,7 +156,20 @@ final class HomeMode {
         "com.fengmi.projector.imaging", "com.fengmi.platform", "com.fengmi.Autopair", "com.fengmi.fmsettings",
         "com.fengmi.testsuite", "android.autoinstalls.config.fomovie",
         "uk.co.freeview.tifbridge",
-        "uk.co.freeview.mdsclient", "uk.co.freeview.fvpconfigauth"));
+        "uk.co.freeview.mdsclient", "uk.co.freeview.fvpconfigauth",
+        // Amazon Fire TV: launcher and home starter (the system's HOME), settings, setup, sign-in, keyboard, remote,
+        // Bluetooth and pairing, HDMI-CEC and the remote's TV keys, Wi-Fi and captive portal, TV provider, key policy,
+        // system status, updates, store (protected anyway), web view, VoiceView and its voice
+        "com.amazon.tv.launcher", "com.amazon.firehomestarter", "com.amazon.tv.settings.v2", "com.amazon.tv.settings.core",
+        "com.amazon.tv.oobe", "com.amazon.tv.ooberesource", "com.amazon.identity.auth.device.authorization",
+        "com.amazon.tcomm", "com.amazon.tcomm.client", "com.amazon.dcp", "com.amazon.tv.ime", "com.amazon.fireinputdevices",
+        "com.amazon.device.bluetoothpa", "com.amazon.device.bluetoothkeymaplib", "com.amazon.device.blepa",
+        "com.amazon.autopairservice", "com.amazon.accessoryconfigservice", "com.amazon.tv.devicecontrol",
+        "com.amazon.tv.devicecontrolsettings", "com.amazon.tv.routing", "com.amazon.connectivitycontroller",
+        "com.amazon.cpl", "com.amazon.net.smartconnect", "com.amazon.providers.tv", "com.amazon.tv.keypolicymanager",
+        "com.amazon.ssm", "com.amazon.ssmsys", "com.amazon.device.software.ota", "com.amazon.venezia",
+        "com.amazon.webview.chromium", "com.amazon.logan", "com.ivona.tts.oem", "com.ivona.orchestrator",
+        "com.amazon.tv.quicksettings.ui", "com.amazon.wifilocker"));
 
     /**
      * Android's own pieces: with one of them off, a TV may not start again (a list that took the permission
@@ -208,11 +241,14 @@ final class HomeMode {
      * boot check and an update turn it back on.
      */
     static void ensureRemoteService(Context c, long delayMs) {
-        if (RemoteKeys.supported()) ModeJob.schedule(c, ModeJob.REMOTE, null, delayMs);
+        if (needsService()) ModeJob.schedule(c, ModeJob.REMOTE, null, delayMs);
     }
 
     static void ensureRemoteServiceNow(Context app) {
-        if (!RemoteKeys.supported() || !FREE.equals(state(app).optString("mode"))) return;
+        // Fire TV has no on-device ADB (applyFire): its service is turned on from a computer.
+        if (FireTv.IS) return;
+        JSONObject s = state(app);
+        if (!needsService() || !FREE.equals(s.optString("mode"))) return;
         try (Adb adb = Adb.connect(app, 10_000, null)) {
             remoteService(app, adb, true);
         } catch (IOException e) {
@@ -220,8 +256,13 @@ final class HomeMode {
         }
     }
 
-    private static final String REMOTE_SERVICE = PKG + "/" + PKG + ".RemoteKeyService";
+    /** Fire TV has no app buttons to read, but its home screen works through FireTvService, on and off the same way. */
+    private static final String REMOTE_SERVICE = PKG + "/" + PKG + (FireTv.IS ? ".FireTvService" : ".RemoteKeyService");
     private static final Pattern SERVICE = Pattern.compile("[\\w.]+/[\\w.$]+");
+
+    private static boolean needsService() {
+        return RemoteKeys.supported() || FireTv.IS;
+    }
 
     /** Adds ours to the enabled accessibility services (keeping the others, like TalkBack), or takes it out. */
     private static void remoteService(Context c, Adb adb, boolean on) throws IOException {
@@ -257,7 +298,28 @@ final class HomeMode {
 
     static void applyNow(Context c, String mode) {
         synchronized (RUN) {
-            if (FREE.equals(mode)) applyFree(c); else applyOriginal(c);
+            if (FireTv.IS) applyFire(c, mode);
+            else if (FREE.equals(mode)) applyFree(c); else applyOriginal(c);
+        }
+    }
+
+    /**
+     * Fire TV: its adbd never answers connections from the device itself (tested on Fire OS 7.7.1.7: from a computer
+     * it sends AUTH at once, from 127.0.0.1 or the TV's own address nothing), so there is no ADB here. The switch only
+     * records the mode, which FireTvService follows; turning that service on and the Amazon apps off is done once from
+     * a computer (README).
+     */
+    private static void applyFire(Context c, String mode) {
+        try {
+            JSONObject s = state(c);
+            s.put("mode", FREE.equals(mode) ? FREE : ORIGINAL).put("since", System.currentTimeMillis()).put("homeReverted", false);
+            save(c, s);
+            notice(c, FREE.equals(mode)
+                    ? Ui.tr("Free My TV is on. On Fire TV, its service is turned on once from a computer (see the README).")
+                    : Ui.tr("Original mode: Amazon's home screen is back."));
+            done(c, null);
+        } catch (JSONException e) {
+            done(c, Ui.trf("Couldn't switch: {error}", "error", e.getMessage()));
         }
     }
 
@@ -363,7 +425,7 @@ final class HomeMode {
             s.put("mode", FREE).put("since", System.currentTimeMillis()).put("homeReverted", false)
                     .put("disabled", new JSONArray(sorted(disabled))).put("setupHome", setupHome);
             save(c, s);
-            if (RemoteKeys.supported()) {
+            if (needsService()) {
                 try {
                     remoteService(c, adb, true);
                 } catch (IOException e) {
@@ -492,6 +554,14 @@ final class HomeMode {
     static void revertHomeNow(Context app) {
         synchronized (RUN) {
             JSONObject s = state(app);
+            // Fire TV (no on-device ADB): FireTvService reads homeReverted and leaves Amazon's home screen alone.
+            if (FireTv.IS) {
+                if (!FREE.equals(s.optString("mode")) || s.optBoolean("homeReverted")) return;
+                try { s.put("homeReverted", true); } catch (JSONException ignored) {}
+                save(app, s);
+                notice(app, Ui.tr("Free My TV's home screen crashed 3 times in a row; I switched back to the original one."));
+                return;
+            }
             try (Adb adb = Adb.connect(app, 10_000, null)) {
                 boolean ours = homeHolder(adb).contains(PKG);
                 if (!ours && (!FREE.equals(s.optString("mode")) || s.optBoolean("homeReverted"))) return;
@@ -544,7 +614,8 @@ final class HomeMode {
                 s.remove("busy");
                 save(app, s);
             } catch (JSONException ignored) {}
-            if (!FREE.equals(s.optString("mode"))) return;
+            // Fire TV has no on-device ADB to check with (applyFire); nothing to verify from here.
+            if (!FREE.equals(s.optString("mode")) || FireTv.IS) return;
             List<String> fixed = new ArrayList<>();
             try (Adb adb = Adb.connect(app, 10_000, null)) {
                 Set<String> present = packages(adb, "");
@@ -614,7 +685,8 @@ final class HomeMode {
                         fixed.add(pkg);
                     }
                 }
-                if (!reverted && !homeHolder(adb).contains(PKG)) {
+                // Fire OS keeps HOME on Amazon's launcher whatever we set (FireTvService covers it instead).
+                if (!reverted && !FireTv.IS && !homeHolder(adb).contains(PKG)) {
                     adb.shell("cmd package set-home-activity " + HOME_ACTIVITY);
                     fixed.add(Ui.tr("the home screen"));
                 }

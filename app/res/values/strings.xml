@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Free My TV</string>
+    <string name="fire_tv_service">Fire TV: opens Free My TV when Amazon\'s home screen appears, and closes the Alexa overlay. It only watches which screen is in front.</string>
     <string name="remote_key_service">Lets the app buttons on the remote (Netflix, YouTube, Prime Video, TCL Channel) open the apps you picked in Free My TV, from any app. It only reads those buttons.</string>
 </resources>
