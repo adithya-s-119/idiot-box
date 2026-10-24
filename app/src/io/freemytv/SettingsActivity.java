@@ -135,9 +135,7 @@ public class SettingsActivity extends Activity {
         private final List<String> shelfOrder = new ArrayList<>();
         private boolean editingTop;
         private int pickFor, pickCurrent, pickScroll;   // pickFor: the remote button (index + 1)
-        private static final int PICK_CITY = 0, PICK_LANGUAGE = -1;
-        private final List<String[]> cities = new ArrayList<>();
-        private String cityStatus = "";
+        private static final int PICK_LANGUAGE = -1;
         private final RectF tmp = new RectF(), rowRect = new RectF(), focusBox = new RectF();
         private JSONObject state = new JSONObject(), recs = new JSONObject();
         private boolean hasKey;
@@ -176,8 +174,7 @@ public class SettingsActivity extends Activity {
             super(a);
             activity = a;
             for (int i = 0; i < pop.length; i++) pop[i] = new Spring(0.28f, 0.85f, 0);
-            HomeData.Weather wx = HomeData.get(a).weather;
-            Shaders.sky(scene.palette, System.currentTimeMillis(), wx.sunrise, wx.sunset);
+            Shaders.dream(scene.palette);
             scene.setMotion(0.5f, 0.2f);
             scene.applyPalette();
             setFocusable(true);
@@ -612,8 +609,8 @@ public class SettingsActivity extends Activity {
                         if (e.getRepeatCount() == 0) backDown = true;
                     } else {
                         if (backDown && !e.isCanceled()) {
-                            if (screen == PICKER && (pickFor == PICK_CITY || pickFor == PICK_LANGUAGE)) {
-                                focus = pickFor == PICK_CITY ? CITY_ROW : 0;
+                            if (screen == PICKER && pickFor == PICK_LANGUAGE) {
+                                focus = 0;
                                 screen = HOME_SETTINGS;
                             } else if (screen == PICKER) {
                                 focus = pickFor - 1;
@@ -636,27 +633,14 @@ public class SettingsActivity extends Activity {
 
         // MARK: - Home Settings and Remote Buttons
 
-        private static final String[] UNITS = {"auto", "C", "F"}, THEMES = {"auto", "light", "dark"};
-        /** Home Settings: language, temperature, theme, sounds, weather, city, quotes, then one row per coin. */
-        private static final int CITY_ROW = 5, COIN_ROWS = 7;
+        /** Home Settings: language and sounds (dark only, the weather fixed to one city, no crypto). */
+        private static final int COIN_ROWS = Integer.MAX_VALUE;   // no coin rows in this build
 
-        private boolean dollar() {
-            return "BRL".equalsIgnoreCase(Config.CURRENCY.trim());
-        }
 
         private String[] settingLabels() {
             List<String> l = new ArrayList<>();
             l.add(Ui.tr("Language"));
-            l.add(Ui.tr("Temperature"));
-            l.add(Ui.tr("Theme"));
             l.add(Ui.tr("Navigation sounds"));
-            l.add(Ui.tr("Weather widget"));
-            l.add(Ui.tr("City"));
-            l.add(Ui.tr("Quotes widget"));
-            l.add("Bitcoin");
-            l.add("Ethereum");
-            l.add("Solana");
-            if (dollar()) l.add(Ui.tr("Dollar"));
             return l.toArray(new String[0]);
         }
 
@@ -665,16 +649,7 @@ public class SettingsActivity extends Activity {
             String[] v = new String[labels.length];
             String lang = Prefs.language();
             v[0] = lang.equals("auto") ? Ui.tr("Automatic") : Ui.languageName(lang);
-            String unit = Prefs.temperature();
-            v[1] = unit.equals("C") ? "°C" : unit.equals("F") ? "°F" : Ui.tr("unit|Automatic");
-            String theme = Prefs.theme();
-            v[2] = theme.equals("light") ? Ui.tr("Light") : theme.equals("dark") ? Ui.tr("Dark") : Ui.tr("Automatic");
-            v[3] = onOff(Prefs.sounds());
-            v[4] = onOff(Prefs.weather());
-            v[CITY_ROW] = !cityStatus.isEmpty() ? cityStatus : Prefs.city().isEmpty() ? "—" : Prefs.city();
-            v[6] = onOff(Prefs.quotes());
-            // No quotes widget, nowhere to show prices: the coins read as off (and stay locked) until it is back on.
-            for (int i = COIN_ROWS; i < v.length; i++) v[i] = onOff(Prefs.quotes() && Prefs.coin(i - COIN_ROWS));
+            v[1] = onOff(Prefs.sounds());
             return v;
         }
 
@@ -740,77 +715,10 @@ public class SettingsActivity extends Activity {
             }
             switch (focus) {
                 case 0: break;   // OK opens the language picker.
-                case 1: {
-                    int at = java.util.Arrays.asList(UNITS).indexOf(Prefs.temperature());
-                    Prefs.setTemperature(UNITS[(at + dir + UNITS.length) % UNITS.length]);
-                    break;
-                }
-                case 2: {
-                    int at = java.util.Arrays.asList(THEMES).indexOf(Prefs.theme());
-                    Prefs.setTheme(THEMES[(at + dir + THEMES.length) % THEMES.length]);
-                    break;
-                }
-                case 3: Prefs.setSounds(!Prefs.sounds()); break;
-                case 4: Prefs.setWeather(!Prefs.weather()); break;
-                case CITY_ROW: return;
-                case 6: Prefs.setQuotes(!Prefs.quotes()); break;
-                default:
-                    if (!Prefs.quotes()) return;
-                    Prefs.setCoin(focus - COIN_ROWS, !Prefs.coin(focus - COIN_ROWS));
-                    break;
+                case 1: Prefs.setSounds(!Prefs.sounds()); break;
+                default: return;
             }
             HomeData.get(getContext()).settingsChanged();
-        }
-
-        private void askCity() {
-            if (Ui.tr("Searching…").equals(cityStatus)) return;
-            EditText field = new EditText(activity);
-            field.setSingleLine(true);
-            field.setHint(Ui.tr("Type the city's name"));
-            field.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-            AlertDialog dialog = new AlertDialog.Builder(activity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                    .setTitle(Ui.tr("City"))
-                    .setView(field)
-                    .setPositiveButton(Ui.tr("Search"), (d, which) -> searchCity(field.getText().toString()))
-                    .setNegativeButton(Ui.tr("Cancel"), null)
-                    .create();
-            field.setOnEditorActionListener((v, action, event) -> {
-                dialog.dismiss();
-                searchCity(field.getText().toString());
-                return true;
-            });
-            dialog.show();
-        }
-
-        private void searchCity(String name) {
-            if (name.trim().isEmpty()) return;
-            cityStatus = Ui.tr("Searching…");
-            invalidate();
-            new Thread(() -> {
-                List<String[]> found;
-                String error;
-                try {
-                    found = HomeData.findCity(name);
-                    error = found.isEmpty() ? Ui.tr("No city with that name.") : "";
-                } catch (Exception e) {
-                    found = new ArrayList<>();
-                    error = Ui.trf("Couldn't search now: {error}", "error", e.getMessage());
-                    AppLog.w("city search: " + e.getMessage());
-                }
-                List<String[]> result = found;
-                String message = error;
-                handler.post(() -> {
-                    cityStatus = message;
-                    if (!result.isEmpty() && screen == HOME_SETTINGS) {
-                        cities.clear();
-                        cities.addAll(result);
-                        openPicker(PICK_CITY);
-                        spoken.focusMoved();
-                    }
-                    invalidate();
-                    if (!message.isEmpty()) handler.postDelayed(() -> { cityStatus = ""; invalidate(); }, 4000);
-                });
-            }).start();
         }
 
         private boolean scrolling() {
@@ -910,10 +818,7 @@ public class SettingsActivity extends Activity {
         private void openPicker(int which) {
             pickFor = which;
             pickLabels.clear();
-            if (which == PICK_CITY) {
-                for (String[] city : cities) pickLabels.add(city[0]);
-                pickCurrent = -1;
-            } else if (which == PICK_LANGUAGE) {
+            if (which == PICK_LANGUAGE) {
                 String[] choices = languageChoices();
                 for (String code : choices) {
                     pickLabels.add(code.equals("auto") ? Ui.tr("Automatic") : Ui.languageName(code));
@@ -933,8 +838,7 @@ public class SettingsActivity extends Activity {
         /** A long list (the apps): nine rows at a time, the one in use checked. */
         private void drawPicker(Canvas c) {
             Paint heading = Ui.text(Ui.displaySemibold, 34 * k, 0xFFFFFFFF);
-            String title = pickFor == PICK_CITY ? Ui.tr("City")
-                    : pickFor == PICK_LANGUAGE ? Ui.tr("Language") : keyLabels()[pickFor - 1];
+            String title = pickFor == PICK_LANGUAGE ? Ui.tr("Language") : keyLabels()[pickFor - 1];
             c.drawText(title, LIST_X * k + 30 * k, (LIST_TOP - 24) * k, heading);
             int rows = rowCount();
             for (int i = 0; i < rows; i++) {
@@ -998,12 +902,6 @@ public class SettingsActivity extends Activity {
                 }
                 screen = MAIN;
                 focus = 0;
-            } else if (screen == PICKER && pickFor == PICK_CITY) {
-                String[] city = cities.get(pickScroll + focus);
-                Prefs.setCity(city[1], city[2], city[3]);
-                HomeData.get(c).settingsChanged();
-                focus = CITY_ROW;
-                screen = HOME_SETTINGS;
             } else if (screen == PICKER && pickFor == PICK_LANGUAGE) {
                 Prefs.setLanguage(languageChoices()[pickScroll + focus]);
                 focus = 0;
@@ -1021,9 +919,6 @@ public class SettingsActivity extends Activity {
                 openPicker(focus + 1);
             } else if (screen == HOME_SETTINGS && focus == 0) {
                 openPicker(PICK_LANGUAGE);
-            } else if (screen == HOME_SETTINGS && focus == CITY_ROW) {
-                askCity();
-                return;
             } else if (screen == HOME_SETTINGS) {
                 adjust(1);
                 invalidate();

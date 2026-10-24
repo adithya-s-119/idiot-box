@@ -292,52 +292,10 @@ final class Shaders {
         }
     }
 
-    // Sky phases through the day.
+    // The sky: only the night palette in this build (no light mode, no following the sun).
     private static final int[] NIGHT = {0x070B1E, 0x16225A, 0x4B2F8F};
-    private static final int[] DAWN = {0x24183F, 0xE89A55, 0xF6D59A};
-    private static final int[] DAY = {0x1E57C8, 0x4FB9EC, 0x9EE2EE};
-    private static final int[] SUNSET = {0x2E1650, 0xE2546C, 0xF39A4F};
-    private static final int[] DUSK = {0x10173A, 0x36348A, 0x8A4BB0};
 
-    /**
-     * Palette for the sun's current position at your location. Uses the sunrise and sunset times from the last weather
-     * fetch (they shift ~1 min a day, so yesterday's times are fine today); without data, 5:30 and 17:40.
-     */
-    static void sky(Palette out, long now, long sunrise, long sunset) {
-        java.util.Calendar cal = java.util.Calendar.getInstance();
-        cal.setTimeInMillis(now);
-        cal.set(java.util.Calendar.HOUR_OF_DAY, 0);
-        cal.set(java.util.Calendar.MINUTE, 0);
-        cal.set(java.util.Calendar.SECOND, 0);
-        cal.set(java.util.Calendar.MILLISECOND, 0);
-        long midnight = cal.getTimeInMillis();
-        long rise = midnight + timeOfDay(sunrise, (5 * 60 + 30) * 60_000L);
-        long set = midnight + timeOfDay(sunset, (17 * 60 + 40) * 60_000L);
-        long m = 60_000L;
-        long[] at = {rise - 60 * m, rise - 15 * m, rise + 45 * m, set - 45 * m, set, set + 45 * m, set + 105 * m};
-        int[][] key = {NIGHT, DAWN, DAY, DAY, SUNSET, DUSK, NIGHT};
-        if (now <= at[0] || now >= at[at.length - 1]) {
-            out.set(NIGHT[0], NIGHT[1], NIGHT[2]);
-            return;
-        }
-        for (int i = 0; i < at.length - 1; i++) {
-            if (now >= at[i] && now < at[i + 1]) {
-                float f = (float) (now - at[i]) / (at[i + 1] - at[i]);
-                out.set(mix(key[i][0], key[i + 1][0], f), mix(key[i][1], key[i + 1][1], f), mix(key[i][2], key[i + 1][2], f));
-                return;
-            }
-        }
-    }
-
-    /** Time of day (ms since local midnight) of an instant; `fallback` if there is no data. */
-    static long timeOfDay(long at, long fallback) {
-        if (at == 0) return fallback;
-        java.util.Calendar c = java.util.Calendar.getInstance();
-        c.setTimeInMillis(at);
-        return ((c.get(java.util.Calendar.HOUR_OF_DAY) * 60L + c.get(java.util.Calendar.MINUTE)) * 60 + c.get(java.util.Calendar.SECOND)) * 1000L;
-    }
-
-    /** Screensaver: always the night palette, by day and by night. */
+    /** Home, settings and screensaver: always the night palette. */
     static void dream(Palette out) {
         out.set(NIGHT[0], NIGHT[1], NIGHT[2]);
     }

@@ -86,41 +86,25 @@ final class Prefs {
         return v.startsWith("F") ? "F" : v.startsWith("C") ? "C" : "auto";
     }
 
-    static void setTemperature(String v) { put("temperature", v); }
-
-    /** "auto" (dark from sunset to sunrise), "light" or "dark". */
-    static String theme() {
-        String v = sp().getString("theme", "auto");
-        return v.equals("light") || v.equals("dark") ? v : "auto";
-    }
-
-    static void setTheme(String v) { put("theme", v); }
-
-    // MARK: - City
+    // MARK: - City (unused in this build: no weather, and the look is always dark)
 
     static String city() { return sp().getString("city", Config.CITY).trim(); }
     static String latitude() { return sp().getString("latitude", Config.LATITUDE); }
     static String longitude() { return sp().getString("longitude", Config.LONGITUDE); }
 
-    static void setCity(String name, String latitude, String longitude) {
-        sp().edit().putString("city", name).putString("latitude", latitude).putString("longitude", longitude).apply();
-        version++;
-    }
-
     /** The home screen's soft click when moving and opening. */
     static boolean sounds() { return sp().getBoolean("sounds", true); }
     static void setSounds(boolean on) { put("sounds", on); }
 
-    // MARK: - Widgets and coins
+    // MARK: - Widgets
 
-    static boolean weather() { return sp().getBoolean("weather", true); }
-    static void setWeather(boolean on) { put("weather", on); }
+    /** This build: the weather always on, for the city in config.properties (Noida); no setting for it. */
+    static boolean weather() { return true; }
 
-    static boolean quotes() { return sp().getBoolean("quotes", Config.SHOW_CRYPTO); }
-    static void setQuotes(boolean on) { put("quotes", on); }
+    /** This build has no crypto prices: nothing is fetched and no quotes card is drawn. */
+    static boolean quotes() { return false; }
 
-    static boolean coin(int i) { return sp().getBoolean("coin" + i, true); }
-    static void setCoin(int i, boolean on) { put("coin" + i, on); }
+    static boolean coin(int i) { return false; }
 
     // MARK: - Shelf
 
