@@ -8,11 +8,17 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- After the TV boots (and after a TV update), checks that Free My TV mode is still as you left it. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Without a TMDB key, the picks are what the TV's apps publish (Watch Next, preview channels): TvPicks. -->
+    <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
+    <!-- Fire OS's TV provider shows other apps' rows only with this ("read all TV listings"); EPG_DATA alone: own rows. -->
+    <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
 
     <!-- Android 11+: without this list the app can't "see" the other apps (getLeanbackLaunchIntentForPackage
          returns null). The shelf and streaming apps, the live TV apps and, through the <intent>, every TV app
          (for "All Apps"). -->
     <queries>
+        <!-- Free My TV's music engine: the Music tab browses it and plays through it (MusicEngine). -->
+        <package android:name="io.freemytv.music" />
         <package android:name="com.netflix.ninja" />
         <package android:name="com.google.android.youtube.tv" />
         <package android:name="com.amazon.amazonvideo.livingroom" />
@@ -144,6 +150,83 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/remote_key_service" />
         </service>
+
+        <!-- Fire TV only (FireTv): opens our home screen when Amazon's comes up, closes the Alexa overlay. On only in
+             Free My TV mode, like RemoteKeyService. -->
+        <service
+            android:name=".FireTvService"
+            android:exported="true"
+            android:label="Free My TV"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/fire_tv_service" />
+        </service>
+
+        <!-- What the music apps are playing, for the music screensaver: Android shares media sessions only with a
+             notification listener. Reads no notifications. Access from a computer (NowPlaying). In :home, beside the
+             home screen and the screensaver that read it (Music). -->
+        <service
+            android:name=".NowPlaying"
+            android:process=":home"
+            android:exported="true"
+            android:label="Free My TV"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Fire TV only: the remote's Live TV button (links for Amazon's Live TV app, off in Free My TV mode).
+             Disabled here so Google TVs keep their own live TV; FireTv.setUp enables it on Fire TV. -->
+        <!-- The Music tab's search, with Free My TV's own keyboard (MusicSearchActivity): no system keyboard. -->
+        <activity
+            android:name=".MusicSearchActivity"
+            android:process=":home"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:windowSoftInputMode="stateAlwaysHidden|adjustNothing"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
+
+        <!-- The music screensaver: opened by the home screen while music plays (MusicSaverActivity). -->
+        <activity
+            android:name=".MusicSaverActivity"
+            android:process=":home"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout" />
+
+        <!-- Live TV: a channel full screen in Android's own player (Live, LiveSource). -->
+        <activity
+            android:name=".LivePlayerActivity"
+            android:process=":home"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout" />
+
+        <activity
+            android:name=".LiveTvActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="livetv" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="amzn" android:host="com.amazon.tv.livetv" />
+            </intent-filter>
+        </activity>
 
         <receiver
             android:name=".HomeReceiver"

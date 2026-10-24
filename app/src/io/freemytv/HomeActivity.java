@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -15,8 +18,22 @@ import android.widget.TextView;
  * back to the TV's original one.
  */
 public class HomeActivity extends Activity {
+    /** Brought back by the Music tab's player: stay as it was (not the Home button's fresh start). */
+    static final String EXTRA_KEEP = "keep";
     private HomeView home;
     private int prefsVersion = Prefs.version;   // settings changed while we were away: start over
+    // The music screensaver: after MusicSaverActivity.IDLE_MS without a key on the home screen while music plays.
+    private final Handler idle = new Handler(Looper.getMainLooper());
+    private long lastKey;
+    private final Runnable checkIdle = new Runnable() {
+        @Override public void run() {
+            if (Music.playing() && hasWindowFocus() && SystemClock.uptimeMillis() - lastKey >= MusicSaverActivity.IDLE_MS) {
+                startActivity(new Intent(HomeActivity.this, MusicSaverActivity.class));
+            } else {
+                idle.postDelayed(this, 1000);
+            }
+        }
+    };
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -48,9 +65,42 @@ public class HomeActivity extends Activity {
             return;
         }
         if (home != null) home.resume();
+        askForTvListings();
+        lastKey = SystemClock.uptimeMillis();
+        idle.removeCallbacks(checkIdle);
+        if (home != null) idle.postDelayed(checkIdle, 1000);
+    }
+
+    /** Asked once per start: the picks come from the apps' Watch Next rows (TvPicks); a TMDB key only adds their art. */
+    private static boolean askedTv;
+
+    private void askForTvListings() {
+        if (askedTv || home == null || TvPicks.allowed(this)) return;
+        askedTv = true;
+        requestPermissions(TvPicks.PERMISSIONS, 1);
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (TvPicks.allowed(this)) recreate();
+    }
+
+    /**
+     * Back from the music screensaver (or anything over the home screen): the idle time starts again. The screensaver
+     * took the keys that closed it, so without this it would open again at once.
+     */
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) lastKey = SystemClock.uptimeMillis();
+    }
+
+    @Override public void onUserInteraction() {
+        super.onUserInteraction();
+        lastKey = SystemClock.uptimeMillis();
     }
 
     @Override protected void onPause() {
+        idle.removeCallbacks(checkIdle);
         if (home != null) home.pause();
         super.onPause();
     }
@@ -58,7 +108,7 @@ public class HomeActivity extends Activity {
     /** Home button pressed on the home screen: back to the entry state (focus on the first app, sheet closed). */
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        if (home != null) home.reset(true);
+        if (home != null && !intent.getBooleanExtra(EXTRA_KEEP, false)) home.reset(true);
     }
 
     @Override protected void onDestroy() {
@@ -68,10 +118,11 @@ public class HomeActivity extends Activity {
 
     @Override public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        if (level >= TRIM_MEMORY_COMPLETE) Recs.get(this).trim();
+        if (level >= TRIM_MEMORY_UI_HIDDEN) Recs.get(this).trim();   // hidden: the app in front gets the memory
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        lastKey = SystemClock.uptimeMillis();   // every key, also those the home screen takes (onUserInteraction misses them)
         if (RemoteKeys.onKey(this, event)) return true;
         if (home != null && home.onKey(event)) return true;
         return super.dispatchKeyEvent(event);

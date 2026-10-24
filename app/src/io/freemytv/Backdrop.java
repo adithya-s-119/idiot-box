@@ -16,8 +16,9 @@ import android.graphics.Shader;
  *  - the frosted version (192×108, heavily blurred) of the same image: the background of the frosted glass and of the
  *    bottom drawer;
  *  - the Liquid Glass version (480×270, lightly blurred): the photo shows through the shelf and the cards;
- *  - with forLight: the cards (the photo without scrims, cropped wide and tall, already at the focused card size) and
- *    the frosted and glass versions blended with white (by day) and with near-black (at night).
+ *  - with forLight: the card (the photo without scrims, cropped 16:9, already at the focused card size) and the
+ *    frosted and glass versions blended with near-black. Later, only for the cards around the focus: the photo itself
+ *    at BG_W × BG_H (the full-screen background; Recs.photo) and the title's logo, when TMDB has one.
  * Only what is needed gets built (with forLight, no full photo: the cards are lightweight, so all 9 for the three tabs
  * fit in memory, ready); the other fields stay null.
  * The final image lives only in GPU memory (HARDWARE): drawing it costs one texture, and the process doesn't hold 8 MB.
@@ -26,8 +27,12 @@ final class Backdrop {
     /** The UI's size against 1920×1080 (at most 1): nothing is built bigger than the screen can show. */
     private static final float UI_SCALE = uiScale();
     static final int W = ui(1920), H = ui(1080), FW = 192, FH = 108, GW = 480, GH = 270;
-    /** The cards at their focused size (1.05×): the wide one and the two tall ones. */
-    static final int WIDE_W = ui(1092), WIDE_H = ui(464), TALL_W = ui(336), TALL_H = ui(464);
+    /** The row's cards at their focused size (1.05×). */
+    static final int CARD_W = ui(288), CARD_H = ui(162);
+    /** The full-screen photo: 1280×720 scaled up looks the same behind the scrims and costs 4 MB, not 8. */
+    static final int BG_W = ui(1280), BG_H = ui(720);
+    /** The title's logo, sized by height for the hero: 110 tall, up to 900 wide (wide logos come out thinner). */
+    static final int LOGO_W = ui(900), LOGO_H = ui(110);
 
     private static float uiScale() {
         android.util.DisplayMetrics m = android.content.res.Resources.getSystem().getDisplayMetrics();
@@ -41,19 +46,20 @@ final class Backdrop {
     final Bitmap image;
     final int[] frost;      // heavily blurred (frosted glass, bottom drawer)
     final int[] glass;      // lightly blurred (Liquid Glass: the photo shows through the glass)
-    final Bitmap wide, tall;            // the photo on the cards
+    final Bitmap card;                  // the photo on the card
+    volatile Bitmap bg;                 // the photo on the whole screen (light design), while it's among the recent
+    volatile Bitmap logo;               // the title's logo (TMDB), or null
     final int[] light, lightGlass;      // by day: the frosted and glass versions, lightened
     final Bitmap lightImage;            // by day: the background (the lightened frosted version, scaled up on screen)
     final int[] nightFrost, nightGlass; // at night: frosted (the bottom drawer's frosted glass) and glass, darkened
     final Bitmap nightImage;            // at night: the background (the darkened frosted version)
 
-    private Backdrop(Bitmap image, int[] frost, int[] glass, Bitmap wide, Bitmap tall, int[] light, int[] lightGlass,
+    private Backdrop(Bitmap image, int[] frost, int[] glass, Bitmap card, int[] light, int[] lightGlass,
                      int[] night, int[] nightGlass) {
         this.image = image;
         this.frost = frost;
         this.glass = glass;
-        this.wide = wide;
-        this.tall = tall;
+        this.card = card;
         this.light = light;
         this.lightGlass = lightGlass;
         this.nightFrost = night;
@@ -62,7 +68,9 @@ final class Backdrop {
         nightImage = night == null ? null : Bitmap.createBitmap(night, FW, FH, Bitmap.Config.ARGB_8888);
     }
 
-    static Backdrop make(Bitmap src, boolean forLight) {
+    /** [squareCard]: the card is the picture's middle square (a song's cover, whole) rather than 16:9 of the screen. */
+    static Backdrop make(Bitmap src, boolean forLight, boolean squareCard) {
+        Bitmap square = forLight && squareCard ? card(src, CARD_W, CARD_W) : null;
         Bitmap out = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(out);
         Paint photo = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
@@ -72,15 +80,14 @@ final class Backdrop {
         src.recycle();
         if (forLight) {
             // Light design: everything comes from the photo without scrims.
-            Bitmap wide = card(out, WIDE_W, WIDE_H), tall = card(out, TALL_W, TALL_H);
+            Bitmap card = square != null ? square : card(out, CARD_W, CARD_H);
+            // Dark only in this build: no lightened copies (less memory and work per photo).
             int[] frost = reduce(out, FW, FH, 3, 3);
-            int[] light = whiten(frost.clone(), 0.82f);
             int[] glass = reduce(out, GW, GH, 2, 2);
-            int[] lightGlass = whiten(glass.clone(), 0.74f);
             int[] night = darken(frost.clone(), 0.76f);
             int[] nightGlass = darken(glass, 0.56f);
             out.recycle();
-            return new Backdrop(null, frost, null, wide, tall, light, lightGlass, night, nightGlass);
+            return new Backdrop(null, frost, null, card, null, null, night, nightGlass);
         }
 
         float boost = Math.max(0, Math.min(0.3f, (luminance(out, 0, 0.22f, 0.5f, 0.62f) - 0.22f) * 1.1f));
@@ -107,51 +114,7 @@ final class Backdrop {
 
         int[] frost = reduce(out, FW, FH, 3, 3);
         int[] glass = reduce(out, GW, GH, 2, 2);
-        return new Backdrop(gpu(out), frost, glass, null, null, null, null, null, null);
-    }
-
-    /** How many times smaller the screensaver photo's frosted version is (the glass math uses the same number). */
-    static final int PHOTO_FROST = 6;
-
-    /**
-     * Screensaver: the whole original from disk at w × h (center-cropped to that aspect ratio), filtered down, plus the
-     * frosted version (1/6, blurred) for the glass clock. `light` receives the luminance (0 to 1) where the caption
-     * (bottom left) and the clock (top right) sit, for the scrims. Returns {photo (mutable), frosted}.
-     */
-    static Bitmap[] photo(java.io.File f, int w, int h, float[] light) throws java.io.IOException {
-        android.graphics.BitmapFactory.Options bounds = new android.graphics.BitmapFactory.Options();
-        bounds.inJustDecodeBounds = true;
-        android.graphics.BitmapFactory.decodeFile(f.getPath(), bounds);
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new java.io.IOException("unreadable image");
-        android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
-        opts.inSampleSize = 1;
-        while (bounds.outWidth / (opts.inSampleSize * 2) >= w && bounds.outHeight / (opts.inSampleSize * 2) >= h) opts.inSampleSize *= 2;
-        Bitmap src = android.graphics.BitmapFactory.decodeFile(f.getPath(), opts);
-        if (src == null) throw new java.io.IOException("unreadable image");
-        float ratio = (float) w / h;
-        int cw = Math.min(src.getWidth(), Math.round(src.getHeight() * ratio));
-        int ch = Math.min(src.getHeight(), Math.round(cw / ratio));
-        Bitmap b = Bitmap.createBitmap(src, (src.getWidth() - cw) / 2, (src.getHeight() - ch) / 2, cw, ch);
-        if (b != src) src.recycle();
-        while (b.getWidth() / 2 >= w) {
-            Bitmap half = Bitmap.createScaledBitmap(b, b.getWidth() / 2, b.getHeight() / 2, true);
-            b.recycle();
-            b = half;
-        }
-        Bitmap out = b.getWidth() == w && b.getHeight() == h ? b : Bitmap.createScaledBitmap(b, w, h, true);
-        if (out != b) b.recycle();
-        if (light != null && light.length >= 2) {
-            light[0] = luminance(out, 0, 0.6f, 0.5f, 0.95f);
-            light[1] = luminance(out, 0.62f, 0.04f, 0.96f, 0.36f);
-        }
-        int fw = w / PHOTO_FROST, fh = h / PHOTO_FROST;
-        Bitmap frost = Bitmap.createBitmap(reduce(out, fw, fh, 3, 2), fw, fh, Bitmap.Config.ARGB_8888);
-        if (!out.isMutable()) {
-            Bitmap copy = out.copy(Bitmap.Config.ARGB_8888, true);
-            out.recycle();
-            out = copy;
-        }
-        return new Bitmap[] {out, frost};
+        return new Backdrop(gpu(out), frost, glass, null, null, null, null, null);
     }
 
     /** The center of the photo at the card's aspect ratio, filtered down (halving while possible) to the exact size. */
@@ -167,6 +130,99 @@ final class Backdrop {
         }
         Bitmap out = Bitmap.createScaledBitmap(b, w, h, true);
         if (b != full && b != out) b.recycle();
+        return gpu(out);
+    }
+
+    /** The full-screen photo: the image center-cropped to 16:9 at BG_W × BG_H, on the GPU. */
+    static Bitmap background(Bitmap src) {
+        Bitmap out = Bitmap.createBitmap(BG_W, BG_H, Bitmap.Config.ARGB_8888);
+        float scale = Math.max((float) BG_W / src.getWidth(), (float) BG_H / src.getHeight());
+        float sw = src.getWidth() * scale, sh = src.getHeight() * scale;
+        new Canvas(out).drawBitmap(src, null, new RectF((BG_W - sw) / 2, (BG_H - sh) / 2, (BG_W + sw) / 2, (BG_H + sh) / 2),
+                new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG));
+        src.recycle();
+        return gpu(out);
+    }
+
+    /**
+     * The picture without bars around it: a music video's thumbnail is often a square cover in a wide frame, or a
+     * wide frame in a 4:3 one. Edges count as bars while every sampled pixel along them is near black; trimmed only
+     * when they're at least 3 % of the side (so a dark picture keeps its edges). A song's thumbnail has its square
+     * cover between two bars of one flat colour instead (a dark shade of the cover): those go too, when both sides
+     * have one about as wide as the other.
+     */
+    static Bitmap trimBars(Bitmap src) {
+        int w = src.getWidth(), h = src.getHeight();
+        int left = 0, right = w, top = 0, bottom = h;
+        while (left < w / 2 && dark(src, left, true)) left++;
+        while (right > w / 2 && dark(src, right - 1, true)) right--;
+        while (top < h / 2 && dark(src, top, false)) top++;
+        while (bottom > h / 2 && dark(src, bottom - 1, false)) bottom--;
+        if (left + (w - right) < w * 0.03f) {
+            left = 0;
+            right = w;
+        }
+        if (top + (h - bottom) < h * 0.03f) {
+            top = 0;
+            bottom = h;
+        }
+        if (left == 0 && right == w) {
+            // The bars' colour a little way in: the outermost columns are often a near-black edge.
+            int in = Math.round(w * 0.02f), l = 0, r = w;
+            int leftColour = src.getPixel(in, h / 2), rightColour = src.getPixel(w - 1 - in, h / 2);
+            while (l < w / 2 && (flat(src, l, leftColour) || dark(src, l, true))) l++;
+            while (r > w / 2 && (flat(src, r - 1, rightColour) || dark(src, r - 1, true))) r--;
+            if (l >= w * 0.05f && w - r >= w * 0.05f && Math.abs(l - (w - r)) <= w * 0.02f) {
+                left = l;
+                right = r;
+            }
+        }
+        if (left == 0 && right == w && top == 0 && bottom == h) return src;
+        Bitmap out = Bitmap.createBitmap(src, left, top, right - left, bottom - top);
+        if (out != src) src.recycle();
+        return out;
+    }
+
+    /** A column (or row) that is near black all along: 24 samples, none brighter than 18 of 255. */
+    private static boolean dark(Bitmap b, int at, boolean column) {
+        int n = 24, len = column ? b.getHeight() : b.getWidth();
+        for (int i = 0; i < n; i++) {
+            int along = (int) ((i + 0.5f) * len / n);
+            int px = column ? b.getPixel(at, along) : b.getPixel(along, at);
+            if (Math.max((px >> 16) & 255, Math.max((px >> 8) & 255, px & 255)) > 18) return false;
+        }
+        return true;
+    }
+
+    /**
+     * A song's cover for the full-screen background: blurred a little and darkened (a cover blown up to the whole
+     * screen shows its pixels, and a pale one washes out the title over it). Small: the background scales it up.
+     */
+    static Bitmap soften(Bitmap src) {
+        int w = 320, h = Math.max(1, Math.round(320f * src.getHeight() / src.getWidth()));
+        int[] px = darken(reduce(src, w, h, 2, 2), 0.22f);
+        src.recycle();
+        return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888);
+    }
+
+    /** A column that is [colour] all along: 24 samples, each channel within 14 of it (a JPEG's flat bar isn't exact). */
+    private static boolean flat(Bitmap b, int x, int colour) {
+        int n = 24, h = b.getHeight();
+        for (int i = 0; i < n; i++) {
+            int px = b.getPixel(x, (int) ((i + 0.5f) * h / n));
+            for (int shift = 0; shift <= 16; shift += 8) {
+                if (Math.abs(((px >> shift) & 255) - ((colour >> shift) & 255)) > 14) return false;
+            }
+        }
+        return true;
+    }
+
+    /** A title logo fitted into LOGO_W × LOGO_H, keeping its shape (never scaled up past twice its size). */
+    static Bitmap logo(Bitmap src) {
+        float scale = Math.min(2f, Math.min((float) LOGO_W / src.getWidth(), (float) LOGO_H / src.getHeight()));
+        int w = Math.max(1, Math.round(src.getWidth() * scale)), h = Math.max(1, Math.round(src.getHeight() * scale));
+        Bitmap out = w == src.getWidth() && h == src.getHeight() ? src : Bitmap.createScaledBitmap(src, w, h, true);
+        if (out != src) src.recycle();
         return gpu(out);
     }
 
@@ -186,17 +242,6 @@ final class Backdrop {
             int r = Math.round(((p >> 16) & 255) * keep + base);
             int g = Math.round(((p >> 8) & 255) * keep + base);
             int b = Math.round((p & 255) * keep + base + 2 * amount);
-            px[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
-        }
-        return px;
-    }
-
-    private static int[] whiten(int[] px, float amount) {
-        for (int i = 0; i < px.length; i++) {
-            int p = px[i];
-            int r = Math.round(((p >> 16) & 255) * (1 - amount) + 255 * amount);
-            int g = Math.round(((p >> 8) & 255) * (1 - amount) + 255 * amount);
-            int b = Math.round((p & 255) * (1 - amount) + 255 * amount);
             px[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
         }
         return px;

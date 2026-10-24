@@ -71,6 +71,87 @@ final class HomeApps {
         float logoInk;      // fraction of the logo with ink (thin logos are drawn larger, with the same "weight")
         float logoScale = 1; // size tweak by eye (compact logos need more)
         boolean connected = true;
+        Bitmap icon;        // the app's own square icon (the apps row at rest)
+        Bitmap blur;        // its TV card, tiny and blurred: the background while it has focus (scaled up, it stays soft)
+        int tint = 0xFF2C2C31;   // the icon's main color (card behind the icon, the background when focused)
+        boolean youtube;    // TizenTube: shown as YouTube (its logo and colors)
+    }
+
+    /** TizenTube (a YouTube client) wears YouTube's colors on the home screen. */
+    static final String TIZENTUBE = "io.gh.reisxd.tizentube";
+
+    /** A 64×36 copy of the card, box-blurred: drawn over the whole screen it reads as the card's colors, out of focus. */
+    private static Bitmap blurred(Bitmap tile) {
+        try {
+            Bitmap soft = tile.getConfig() == Bitmap.Config.HARDWARE ? tile.copy(Bitmap.Config.ARGB_8888, false) : tile;
+            Bitmap small = Bitmap.createScaledBitmap(soft, 64, 36, true);
+            int w = 64, h = 36;
+            int[] px = new int[w * h], tmp = new int[w * h];
+            small.getPixels(px, 0, w, 0, 0, w, h);
+            for (int pass = 0; pass < 3; pass++) {
+                box(px, tmp, w, h, 3, true);
+                box(tmp, px, w, h, 3, false);
+            }
+            Bitmap out = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888);
+            if (small != soft) small.recycle();
+            if (soft != tile) soft.recycle();
+            return out;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Moving average of radius r in one direction, repeating the edge pixels. */
+    private static void box(int[] in, int[] out, int w, int h, int r, boolean horizontal) {
+        int n = horizontal ? w : h, lines = horizontal ? h : w, step = horizontal ? 1 : w, lineStep = horizontal ? w : 1;
+        float k = 1f / (2 * r + 1);
+        for (int line = 0; line < lines; line++) {
+            int base = line * lineStep;
+            float sr = 0, sg = 0, sb = 0;
+            for (int i = -r; i <= r; i++) {
+                int p = in[base + Math.max(0, Math.min(n - 1, i)) * step];
+                sr += (p >> 16) & 255;
+                sg += (p >> 8) & 255;
+                sb += p & 255;
+            }
+            for (int i = 0; i < n; i++) {
+                out[base + i * step] = 0xFF000000 | (Math.round(sr * k) << 16) | (Math.round(sg * k) << 8) | Math.round(sb * k);
+                int add = in[base + Math.min(n - 1, i + r + 1) * step], sub = in[base + Math.max(0, i - r) * step];
+                sr += ((add >> 16) & 255) - ((sub >> 16) & 255);
+                sg += ((add >> 8) & 255) - ((sub >> 8) & 255);
+                sb += (add & 255) - (sub & 255);
+            }
+        }
+    }
+
+    /** The app's icon drawn at 160 px, and its main color (the most saturated common color of its opaque pixels). */
+    private static void loadIcon(PackageManager pm, Item it) {
+        try {
+            android.graphics.drawable.Drawable d = pm.getApplicationIcon(it.pkg);
+            int size = 160;
+            Bitmap b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(b);
+            d.setBounds(0, 0, size, size);
+            d.draw(c);
+            it.icon = b;
+            float[] hsv = new float[3];
+            float best = -1;
+            long r = 0, g = 0, bl = 0, n = 0;
+            int[] px = new int[size * size];
+            b.getPixels(px, 0, size, 0, 0, size, size);
+            for (int i = 0; i < px.length; i += 7) {
+                int p = px[i];
+                if ((p >>> 24) < 200) continue;
+                android.graphics.Color.colorToHSV(p, hsv);
+                if (hsv[1] < 0.25f || hsv[2] < 0.2f) continue;
+                r += (p >> 16) & 255;
+                g += (p >> 8) & 255;
+                bl += p & 255;
+                n++;
+            }
+            if (n > 20) it.tint = 0xFF000000 | (int) (r / n) << 16 | (int) (g / n) << 8 | (int) (bl / n);
+        } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
+        }
     }
 
     /**
@@ -148,6 +229,21 @@ final class HomeApps {
                 if (it.logo != null) it.logoInk = ink(it.logo);
                 it.logoDark = ownLogoCached(c, d[0] + "-dark");
                 it.logoScale = Float.parseFloat(d[5]);
+            }
+            it.youtube = pkg.startsWith(TIZENTUBE);
+            if (it.youtube) {
+                // TizenTube wears YouTube's official logo: assets/logos/youtube.png is Wikimedia Commons' "YouTube
+                // 2024.svg" (its text made white for the dark cards), youtube-icon.png its play button.
+                it.logo = ownLogoCached(c, "youtube");
+                if (it.logo != null) {
+                    it.logoInk = ink(it.logo);
+                    it.tile = null;   // the logo on YouTube's card, not TizenTube's own art
+                }
+                it.icon = square(ownLogoCached(c, "youtube-icon"));
+                it.tint = 0xFFC4302B;
+            } else {
+                if (it.tile != null) it.blur = blurred(it.tile);
+                loadIcon(pm, it);
             }
             items.add(it);
         }
@@ -411,7 +507,15 @@ final class HomeApps {
                 intent = launchIntent(a.getPackageManager(), it.pkg);
                 plain = intent;
                 if (plain != null) plain.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-                if (intent != null && it.uri != null) {
+                if (intent != null && it.uri != null && it.uri.startsWith("intent:")) {
+                    // TvPicks: Watch Next and preview rows keep a whole intent; kept to its own app.
+                    try {
+                        intent = Intent.parseUri(it.uri, Intent.URI_INTENT_SCHEME).setPackage(it.pkg);
+                        intent.setSelector(null);
+                    } catch (java.net.URISyntaxException e) {
+                        AppLog.w("couldn't read " + it.label + "'s link: " + e.getMessage());
+                    }
+                } else if (intent != null && it.uri != null) {
                     intent = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(it.uri)).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(it.pkg);
                 }
                 break;
@@ -425,7 +529,7 @@ final class HomeApps {
                 intent = new Intent().setComponent(new ComponentName(a, SettingsActivity.class));
                 break;
             case ANDROID_SETTINGS:
-                intent = new Intent(Settings.ACTION_SETTINGS);
+                intent = tvSettings(a);
                 break;
             default:
                 return false;
@@ -446,6 +550,20 @@ final class HomeApps {
                 return false;
             }
         }
+    }
+
+    /**
+     * The TV's settings. On Fire TV the standard settings request goes through a stop in Amazon's home screen app
+     * (its SettingsActivity), and the Home redirect pulled it back to this home screen; Amazon's own request opens
+     * the Settings page straight away (its MainSettingsActivity).
+     */
+    private static Intent tvSettings(Activity a) {
+        if (FireTv.IS) {
+            Intent amazon = new Intent("amazon.intent.action.MAINSETTINGS").addCategory("android.intent.category.MAINSETTINGS")
+                    .setComponent(new ComponentName(FireTv.LAUNCHER, FireTv.LAUNCHER + ".ui.MainSettingsActivity"));
+            if (amazon.resolveActivity(a.getPackageManager()) != null) return amazon;
+        }
+        return new Intent(Settings.ACTION_SETTINGS);
     }
 
     /**
@@ -836,7 +954,17 @@ final class HomeApps {
         Bitmap b = Bitmap.createBitmap(TILE_W, TILE_H, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(b);
         canvas.drawColor(0xFF15161C);   // banners with transparency sit on a dark background
-        d.setBounds(0, 0, TILE_W, TILE_H);
+        // In its own shape: a banner that isn't 16:9 (PLAYFy TV's) is fitted inside, not stretched (its lettering
+        // came out wide); one within 6% of 16:9 fills the card.
+        int iw = d.getIntrinsicWidth(), ih = d.getIntrinsicHeight();
+        float ratio = iw > 0 && ih > 0 ? (float) iw / ih : (float) TILE_W / TILE_H, card = (float) TILE_W / TILE_H;
+        if (Math.abs(ratio / card - 1) < 0.06f) {
+            d.setBounds(0, 0, TILE_W, TILE_H);
+        } else {
+            float scale = Math.min((float) TILE_W / iw, (float) TILE_H / ih);
+            int w = Math.round(iw * scale), h = Math.round(ih * scale);
+            d.setBounds((TILE_W - w) / 2, (TILE_H - h) / 2, (TILE_W + w) / 2, (TILE_H + h) / 2);
+        }
         d.draw(canvas);
         return b;
     }
@@ -908,6 +1036,15 @@ final class HomeApps {
         canvas.drawBitmap(logo, null, new RectF((TILE_W - w) / 2, (TILE_H - h) / 2, (TILE_W + w) / 2, (TILE_H + h) / 2),
                 new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG));
         return b;
+    }
+
+    /** [b] in the middle of a transparent square (the apps row draws icons square). */
+    private static Bitmap square(Bitmap b) {
+        if (b == null || b.getWidth() == b.getHeight()) return b;
+        int side = Math.max(b.getWidth(), b.getHeight());
+        Bitmap out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
+        new Canvas(out).drawBitmap(b, (side - b.getWidth()) / 2f, (side - b.getHeight()) / 2f, new Paint(Paint.FILTER_BITMAP_FLAG));
+        return out;
     }
 
     private static Bitmap darkTile() {
