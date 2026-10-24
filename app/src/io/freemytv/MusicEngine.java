@@ -263,8 +263,12 @@ final class MusicEngine {
             playId(c, r.mediaId, r.title);
             return;
         }
+        AppLog.w("music: \u201c" + r.title + "\u201d: asking the engine for its songs");
         browse(c, r.mediaId, items -> {
-            if (items == null) return;
+            if (items == null) {
+                AppLog.w("music: the engine couldn't list \u201c" + r.title + "\u201d");
+                return;
+            }
             for (MediaBrowser.MediaItem m : items) {
                 if (m.isPlayable() && m.getMediaId() != null) {
                     playId(c, m.getMediaId(), r.title);
