@@ -195,6 +195,7 @@ final class HomeApps {
             "com.Smartdevice.emanual",              // Skyworth: user manual
             "com.google.android.videos",            // Google Play Movies (discontinued)
             "com.disney.starplus",                  // Star+ (merged into Disney+)
+            "com.amazon.audiohome",                 // Fire TV: Music & More (Amazon's audio hub; the Music tab covers it)
             "com.tcl.exhibit"));                    // TCL: T-Exhibition
 
     private static final Map<String, Bitmap> TILES = new HashMap<>();   // key → ready card
