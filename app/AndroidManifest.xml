@@ -1,41 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="io.freemytv"
-    android:versionCode="2"
-    android:versionName="1.1">
+    package="io.idiotbox"
+    android:versionCode="1"
+    android:versionName="1.0">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- After the TV boots (and after a TV update), checks that Free My TV mode is still as you left it. -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Without a TMDB key, the picks are what the TV's apps publish (Watch Next, preview channels): TvPicks. -->
     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
     <!-- Fire OS's TV provider shows other apps' rows only with this ("read all TV listings"); EPG_DATA alone: own rows. -->
     <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
 
-    <!-- Android 11+: without this list the app can't "see" the other apps (getLeanbackLaunchIntentForPackage
-         returns null). The shelf and streaming apps, the live TV apps and, through the <intent>, every TV app
-         (for "All Apps"). -->
+    <!-- Fire OS 8 (Android 11): without this list the app can't "see" the other apps (getLeanbackLaunchIntentForPackage
+         returns null). The shelf and streaming apps and, through the <intent>, every TV app (for "All Apps"). -->
     <queries>
-        <!-- Free My TV's music engine: the Music tab browses it and plays through it (MusicEngine). -->
-        <package android:name="io.freemytv.music" />
+        <!-- The music engine, Prism: the Music tab browses it and plays through it (MusicEngine). -->
+        <package android:name="com.prism.music" />
         <package android:name="com.netflix.ninja" />
-        <package android:name="com.google.android.youtube.tv" />
+        <package android:name="com.amazon.firetv.youtube" />
         <package android:name="com.amazon.amazonvideo.livingroom" />
         <package android:name="com.disney.disneyplus" />
         <package android:name="com.wbd.stream" />
         <package android:name="com.hbo.hbonow" />
-        <package android:name="com.apple.atve.androidtv.appletv" />
-        <package android:name="com.apple.atve.sony.appletv" />
+        <package android:name="com.apple.atve.amazon.appletv" />
         <package android:name="com.hulu.livingroomplus" />
         <package android:name="com.cbs.ott" />
         <package android:name="com.peacocktv.peacockandroid" />
         <package android:name="com.globo.globotv" />
         <package android:name="com.spotify.tv.android" />
-        <package android:name="com.tcl.tv" />
-        <package android:name="com.google.android.tv" />
-        <package android:name="com.mediatek.wwtv.tvcenter" />
-        <package android:name="com.sony.dtv.tvx" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
@@ -55,24 +47,23 @@
 
     <application
         android:name=".App"
-        android:label="Free My TV"
+        android:label="Idiot Box"
         android:icon="@drawable/icon"
         android:banner="@drawable/banner"
         android:allowBackup="false"
         android:usesCleartextTraffic="false">
 
-        <!-- The app's icon opens the settings (switch between Free My TV and the original home screen). -->
+        <!-- The app's icon opens the settings (switch between Idiot Box and the original home screen). -->
         <activity
             android:name=".SettingsActivity"
             android:process=":home"
             android:exported="true"
-            android:label="Free My TV"
+            android:label="Idiot Box"
             android:launchMode="singleTask"
-            android:taskAffinity="io.freemytv.settings"
+            android:taskAffinity="io.idiotbox.settings"
             android:excludeFromRecents="true"
-            android:screenOrientation="landscape"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|locale|layoutDirection"
-            android:theme="@style/FreeMyTV.Home">
+            android:theme="@style/IdiotBox.Sidebar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
@@ -81,12 +72,12 @@
         </activity>
 
         <!-- The home screen. Its own process (:home): if it ever crashes, the safety net in the main process still
-             works. It only becomes the TV's home screen in Free My TV mode (cmd package set-home-activity). -->
+             works. Fire OS keeps Amazon's launcher as Home: FireTvService opens this one over it in Idiot Box mode. -->
         <activity
             android:name=".HomeActivity"
             android:process=":home"
             android:exported="true"
-            android:label="Free My TV"
+            android:label="Idiot Box"
             android:launchMode="singleTask"
             android:taskAffinity=""
             android:stateNotNeeded="true"
@@ -95,7 +86,7 @@
             android:excludeFromRecents="true"
             android:screenOrientation="landscape"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|locale|layoutDirection"
-            android:theme="@style/FreeMyTV.Home">
+            android:theme="@style/IdiotBox.Home">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
@@ -108,7 +99,7 @@
             android:process=":home"
             android:enabled="@bool/dream_in_home"
             android:exported="true"
-            android:label="Free My TV"
+            android:label="Idiot Box"
             android:permission="android.permission.BIND_DREAM_SERVICE">
             <intent-filter>
                 <action android:name="android.service.dreams.DreamService" />
@@ -121,7 +112,7 @@
             android:name=".ScreensaverAlone"
             android:enabled="@bool/dream_alone"
             android:exported="true"
-            android:label="Free My TV"
+            android:label="Idiot Box"
             android:permission="android.permission.BIND_DREAM_SERVICE">
             <intent-filter>
                 <action android:name="android.service.dreams.DreamService" />
@@ -135,28 +126,12 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
-        <!-- The remote's app buttons from inside any app (Settings > Remote Buttons). Its own process: the system waits for it on
-             every key, so the home screen must never be able to slow it down. -->
-        <service
-            android:name=".RemoteKeyService"
-            android:process=":keys"
-            android:exported="true"
-            android:label="Free My TV"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/remote_key_service" />
-        </service>
-
-        <!-- Fire TV only (FireTv): opens our home screen when Amazon's comes up, closes the Alexa overlay. On only in
-             Free My TV mode, like RemoteKeyService. -->
+        <!-- Opens our home screen when Amazon's comes up and closes the Alexa overlay, in Idiot Box mode (FireTv).
+             Turned on once from a computer (tools/firetv.sh). -->
         <service
             android:name=".FireTvService"
             android:exported="true"
-            android:label="Free My TV"
+            android:label="Idiot Box"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -173,16 +148,14 @@
             android:name=".NowPlaying"
             android:process=":home"
             android:exported="true"
-            android:label="Free My TV"
+            android:label="Idiot Box"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
 
-        <!-- Fire TV only: the remote's Live TV button (links for Amazon's Live TV app, off in Free My TV mode).
-             Disabled here so Google TVs keep their own live TV; FireTv.setUp enables it on Fire TV. -->
-        <!-- The Music tab's search, with Free My TV's own keyboard (MusicSearchActivity): no system keyboard. -->
+        <!-- The Music tab's search, with Idiot Box's own keyboard (MusicSearchActivity): no system keyboard. -->
         <activity
             android:name=".MusicSearchActivity"
             android:process=":home"
@@ -208,9 +181,9 @@
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout" />
 
+        <!-- The remote's Live TV button: links for Amazon's Live TV app (off in Idiot Box mode) open our home screen. -->
         <activity
             android:name=".LiveTvActivity"
-            android:enabled="false"
             android:exported="true"
             android:excludeFromRecents="true"
             android:noHistory="true"
@@ -228,13 +201,5 @@
             </intent-filter>
         </activity>
 
-        <receiver
-            android:name=".HomeReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-            </intent-filter>
-        </receiver>
     </application>
 </manifest>

@@ -1,4 +1,4 @@
-"""Draws the app icon, the TV banner and the site's images (Pillow). Usage: python3 tools/make_art.py"""
+"""Draws the app icon and the TV banner (Pillow). Usage: python3 tools/make_art.py"""
 import math
 import os
 
@@ -88,7 +88,7 @@ def banner(w=640, h=360):
     m = mark(int(h * 0.5 * s), bg=False)
     d = ImageDraw.Draw(img)
     f = font(int(h * 0.15 * s), 650)
-    text = "Free My TV"
+    text = "Idiot Box"
     box = d.textbbox((0, 0), text, font=f)
     gap = int(w * 0.02 * s)
     total = m.width + gap + (box[2] - box[0])
@@ -104,9 +104,4 @@ if __name__ == "__main__":
     os.makedirs(res, exist_ok=True)
     mark(192).save(os.path.join(res, "icon.png"))
     banner().save(os.path.join(res, "banner.png"))
-    site = os.path.join(ROOT, "docs/assets")
-    os.makedirs(site, exist_ok=True)
-    mark(512).save(os.path.join(site, "icon-512.png"))
-    mark(180).save(os.path.join(site, "apple-touch-icon.png"))
-    mark(64).save(os.path.join(site, "favicon-64.png"))
     print("ok")
