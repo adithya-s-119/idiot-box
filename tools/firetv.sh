@@ -63,11 +63,12 @@ installed="$(sh pm list packages | sed 's/^package://')"
 disabled="$(sh pm list packages -d | sed 's/^package://')"
 has() { grep -qx "$1" <<<"$2"; }
 
-# The enabled accessibility services without ours (keeping TalkBack and the like).
+# The enabled accessibility services without ours (keeping TalkBack and the like). Android may store ours in the
+# short form too (io.idiotbox/.FireTvService).
 others() {
   local v; v="$(sh settings get secure enabled_accessibility_services)"
   [ "$v" = null ] && v=
-  tr ':' '\n' <<<"$v" | grep -vx "$SERVICE" | grep -v '^$' | paste -sd: - || true
+  tr ':' '\n' <<<"$v" | grep -vx -e "$SERVICE" -e "$PKG/.FireTvService" | grep -v '^$' | paste -sd: - || true
 }
 
 case "$ACTION" in
