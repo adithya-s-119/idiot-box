@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.idiotbox"
-    android:versionCode="1"
-    android:versionName="1.0">
+    android:versionCode="11"
+    android:versionName="1.0.10">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- All Apps: Menu on an app asks Android to uninstall it (its own dialog confirms). -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- Without a TMDB key, the picks are what the TV's apps publish (Watch Next, preview channels): TvPicks. -->
     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
     <!-- Fire OS's TV provider shows other apps' rows only with this ("read all TV listings"); EPG_DATA alone: own rows. -->
@@ -14,10 +15,12 @@
     <!-- Fire OS 8 (Android 11): without this list the app can't "see" the other apps (getLeanbackLaunchIntentForPackage
          returns null). The shelf and streaming apps and, through the <intent>, every TV app (for "All Apps"). -->
     <queries>
-        <!-- The music engine, Prism: the Music tab browses it and plays through it (MusicEngine). -->
+        <!-- The music apps used when none is picked (MusicEngine.KNOWN): BitChord TV and Prism. -->
+        <package android:name="com.music.bitchord.tv" />
         <package android:name="com.prism.music" />
         <package android:name="com.netflix.ninja" />
         <package android:name="com.amazon.firetv.youtube" />
+        <package android:name="com.amazon.firebat" />
         <package android:name="com.amazon.amazonvideo.livingroom" />
         <package android:name="com.disney.disneyplus" />
         <package android:name="com.wbd.stream" />
@@ -39,6 +42,10 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="content" android:host="android.media.tv" />
+        </intent>
+        <!-- The music apps' media browsers: which ones share their music (MusicEngine.findProviders). -->
+        <intent>
+            <action android:name="android.media.browse.MediaBrowserService" />
         </intent>
     </queries>
 

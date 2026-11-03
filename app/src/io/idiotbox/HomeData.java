@@ -8,21 +8,16 @@ import android.os.Looper;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * Weather/sunrise/sunset (Open-Meteo, every 30 min), cached so the screen opens with numbers. Only fetched while the
@@ -71,7 +66,7 @@ final class HomeData {
     volatile Weather weather = new Weather();
 
     private final SharedPreferences cache;
-    private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final ExecutorService io = Net.serial("weather");
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new ArrayList<>();
     private volatile boolean fetchingWeather;
@@ -95,9 +90,8 @@ final class HomeData {
     /** Fetches whatever is stale. The screen calls this when it appears and every minute while it's visible. */
     void refreshIfStale() {
         long now = System.currentTimeMillis();
-        // No weather in this build (no city): nothing to fetch.
         // A negative age (the TV's clock went back) counts as stale: otherwise the data would freeze.
-        if (Prefs.weather() && !fetchingWeather && (now - weatherAt > WEATHER_EVERY || now < weatherAt) && !failedRecently(weatherFailedAt, now)) {
+        if (!fetchingWeather && (now - weatherAt > WEATHER_EVERY || now < weatherAt) && !failedRecently(weatherFailedAt, now)) {
             fetchingWeather = true;
             io.execute(() -> {
                 try {
@@ -126,7 +120,8 @@ final class HomeData {
 
     private static Weather parseWeather(String body) throws Exception {
         JSONObject o = new JSONObject(body);
-        TimeZone zone = TimeZone.getTimeZone(o.optString("timezone", TimeZone.getDefault().getID()));
+        SimpleDateFormat local = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US);
+        local.setTimeZone(TimeZone.getTimeZone(o.optString("timezone", TimeZone.getDefault().getID())));
         Weather w = new Weather();
         JSONObject current = o.getJSONObject("current");
         w.temp = current.getDouble("temperature_2m");
@@ -135,8 +130,8 @@ final class HomeData {
         JSONObject daily = o.getJSONObject("daily");
         w.max = daily.getJSONArray("temperature_2m_max").getDouble(0);
         w.min = daily.getJSONArray("temperature_2m_min").getDouble(0);
-        w.sunrise = localTime(daily.getJSONArray("sunrise").getString(0), zone);
-        w.sunset = localTime(daily.getJSONArray("sunset").getString(0), zone);
+        w.sunrise = localTime(daily.getJSONArray("sunrise").getString(0), local);
+        w.sunset = localTime(daily.getJSONArray("sunset").getString(0), local);
         JSONObject hourly = o.optJSONObject("hourly");
         if (hourly != null) {
             JSONArray times = hourly.getJSONArray("time");
@@ -145,7 +140,7 @@ final class HomeData {
             JSONArray days = hourly.optJSONArray("is_day");
             long now = System.currentTimeMillis();
             for (int i = 0; i < times.length() && w.hours.size() < 6; i++) {
-                long at = localTime(times.getString(i), zone);
+                long at = localTime(times.getString(i), local);
                 if (at <= now) continue;
                 w.hours.add(at);
                 w.hourTemp.add(temps.getDouble(i));
@@ -156,19 +151,18 @@ final class HomeData {
         return w;
     }
 
-    private static long localTime(String iso, TimeZone zone) throws ParseException {
-        SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US);
-        f.setTimeZone(zone);
-        return f.parse(iso).getTime();
+    private static long localTime(String iso, SimpleDateFormat local) throws ParseException {
+        return local.parse(iso).getTime();
     }
 
     static List<String[]> findCity(String name) throws Exception {
-        String lang = Ui.language.replaceAll("-.*", "");   // Open-Meteo takes the language without the country
+        String lang = Ui.language;
+        if (lang.indexOf('-') > 0) lang = lang.substring(0, lang.indexOf('-'));   // Open-Meteo takes the language without the country
         JSONObject o = new JSONObject(get("https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&language=" + lang
                 + "&name=" + URLEncoder.encode(name.trim(), "UTF-8")));
         JSONArray results = o.optJSONArray("results");
         List<String[]> out = new ArrayList<>();
-        java.util.Set<String> seen = new java.util.HashSet<>();   // places with the same name, state and country read the same
+        Set<String> seen = new HashSet<>();   // places with the same name, state and country read the same
         for (int i = 0; results != null && i < results.length(); i++) {
             JSONObject r = results.getJSONObject(i);
             String city = r.optString("name", "");
@@ -184,49 +178,45 @@ final class HomeData {
         return out;
     }
 
-    private static String get(String url) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(6000);
-        c.setReadTimeout(6000);
-        c.setRequestProperty("User-Agent", "IdiotBox");
-        try {
-            if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
-            try (InputStream in = c.getInputStream()) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                byte[] buffer = new byte[8192];
-                int n;
-                while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
-                return out.toString(StandardCharsets.UTF_8.name());
-            }
-        } finally {
-            c.disconnect();
-        }
-    }
-
-    /** This build has only the dark look: no light mode, no following the sunset. */
-    boolean isNight(long now) {
-        return true;
+    private static String get(String url) throws java.io.IOException {
+        return Net.getString(url, 6000, 6000);
     }
 
     // MARK: - Formatting
 
-    private static Locale locale() {
-        return Ui.locale();
+    /** Open-Meteo's WMO weather codes, in the kinds the screen tells apart (in words here, as a symbol in Symbols). */
+    static final int UNKNOWN = -1, CLEAR = 0, MOSTLY_CLEAR = 1, PARTLY_CLOUDY = 2, CLOUDY = 3, FOG = 4, DRIZZLE = 5,
+            HEAVY_RAIN = 6, SNOW = 7, STORM = 8, RAIN = 9;
+
+    static int kind(int code) {
+        if (code < 0) return UNKNOWN;
+        if (code == 0) return CLEAR;
+        if (code == 1) return MOSTLY_CLEAR;
+        if (code == 2) return PARTLY_CLOUDY;
+        if (code == 3) return CLOUDY;
+        if (code == 45 || code == 48) return FOG;
+        if (code >= 51 && code <= 57) return DRIZZLE;
+        if (code == 65 || code == 67 || code == 82) return HEAVY_RAIN;
+        if (code >= 71 && code <= 77 || code == 85 || code == 86) return SNOW;
+        if (code >= 95) return STORM;
+        return RAIN;
     }
 
     /** The weather in words, from Open-Meteo's WMO code. */
     static String condition(int code, boolean day) {
-        if (code < 0) return "";
-        if (code == 0) return day ? Ui.tr("Clear") : Ui.tr("night|Clear");
-        if (code == 1) return day ? Ui.tr("Mostly Sunny") : Ui.tr("Mostly Clear");
-        if (code == 2) return Ui.tr("Partly Cloudy");
-        if (code == 3) return Ui.tr("Cloudy");
-        if (code == 45 || code == 48) return Ui.tr("Fog");
-        if (code >= 51 && code <= 57) return Ui.tr("Drizzle");
-        if (code == 65 || code == 67 || code == 82) return Ui.tr("Heavy Rain");
-        if (code >= 71 && code <= 77 || code == 85 || code == 86) return Ui.tr("Snow");
-        if (code >= 95) return Ui.tr("Thunderstorms");
-        return Ui.tr("Rain");
+        switch (kind(code)) {
+            case UNKNOWN: return "";
+            case CLEAR: return day ? Ui.tr("Clear") : Ui.tr("night|Clear");
+            case MOSTLY_CLEAR: return day ? Ui.tr("Mostly Sunny") : Ui.tr("Mostly Clear");
+            case PARTLY_CLOUDY: return Ui.tr("Partly Cloudy");
+            case CLOUDY: return Ui.tr("Cloudy");
+            case FOG: return Ui.tr("Fog");
+            case DRIZZLE: return Ui.tr("Drizzle");
+            case HEAVY_RAIN: return Ui.tr("Heavy Rain");
+            case SNOW: return Ui.tr("Snow");
+            case STORM: return Ui.tr("Thunderstorms");
+            default: return Ui.tr("Rain");
+        }
     }
 
     /** "H:24°  L:15°" (in Portuguese, "Máx. 24°  Mín. 15°"), with the given space between the two. */

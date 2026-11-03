@@ -6,11 +6,13 @@
 #   tools/firetv.sh <ip> setup    # after: adb install -r IdiotBox.apk
 #   tools/firetv.sh <ip> undo     # back to Amazon's own; then the app can be uninstalled cleanly
 #   tools/firetv.sh <ip> status
+#   tools/firetv.sh <ip> off <package>   # one of OPTIONAL, only when the person asks
 #
 # Apps are only turned off (pm disable-user), never uninstalled: undo turns them back on.
 set -euo pipefail
 
-[ $# -eq 2 ] || { echo "Usage: tools/firetv.sh <ip> setup|undo|status" >&2; exit 2; }
+usage() { echo "Usage: tools/firetv.sh <ip> setup|undo|status, or tools/firetv.sh <ip> off <package>" >&2; exit 2; }
+[ $# -eq 2 ] || { [ $# -eq 3 ] && [ "$2" = off ]; } || usage
 IP="$1"
 ACTION="$2"
 PKG=io.idiotbox
@@ -39,6 +41,11 @@ DEBLOAT=(
   com.amazon.whad com.amazon.whasettings com.amazon.wha.mediabrowserservice com.amazon.audiohome   # multi-room audio
   com.amazon.tv.fw.metrics com.amazon.wirelessmetrics.service           # telemetry (back at every boot)
   com.amazon.dp.logger com.amazon.perfc com.amazon.perfcollection com.amazon.neo.minerva.logcat
+)
+
+# Off only when the person asks (off <package>), as they're apps someone may use; undo turns them back on too.
+OPTIONAL=(
+  com.amazon.firebat   # Prime Video: wakes at every Home press for Amazon's rows and ads (~140 MB on a 1 GB stick)
 )
 
 adb connect "$IP:5555" >/dev/null
@@ -79,7 +86,7 @@ case "$ACTION" in
     echo "Done. On the TV: open Idiot Box > Home Screen > Idiot Box."
     ;;
   undo)
-    for p in "${DEBLOAT[@]}"; do
+    for p in "${DEBLOAT[@]}" "${OPTIONAL[@]}"; do
       if has "$p" "$disabled"; then sh pm enable "$p" >/dev/null && echo "on: $p"; fi
     done
     rest="$(others)"
@@ -96,5 +103,13 @@ case "$ACTION" in
     off=0; for p in "${DEBLOAT[@]}"; do has "$p" "$disabled" && off=$((off + 1)); done
     echo "Amazon extras off: $off of ${#DEBLOAT[@]} listed"
     ;;
-  *) echo "Usage: tools/firetv.sh <ip> setup|undo|status" >&2; exit 2 ;;
+  off)
+    p="$3"
+    printf '%s\n' "${OPTIONAL[@]}" | grep -qx "$p" || { echo "$p isn't in OPTIONAL (see the top of this script)." >&2; exit 2; }
+    if has "$p" "$disabled"; then echo "already off: $p"
+    elif ! has "$p" "$installed"; then echo "not installed: $p"
+    elif sh pm disable-user --user 0 "$p" | grep -q "disabled-user"; then echo "off: $p (undo turns it back on)"
+    else echo "refused: $p"; fi
+    ;;
+  *) usage ;;
 esac

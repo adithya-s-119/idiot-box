@@ -4,17 +4,14 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.JsonReader;
+import android.util.JsonToken;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -24,12 +21,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * Live TV: the channels and their guide, from live.json in the app's own folder, which LiveSource fetches (Indian
- * channels) and makes again every REFRESH_MS. Read again when the file changes. Found by first letter (no
- * categories); the person's favourites are kept by stream address.
+ * channels) and makes again every REFRESH_MS; read in the background (at first, and after each fetch). Found by first
+ * letter (no categories); the person's favourites are kept by stream address.
  * Logos and programme images are kept in storage too (`store`, the least recently used go past IMAGE_BYTES): the
  * favourites' are fetched as soon as the home screen opens, the others when their card is first drawn.
  */
@@ -38,20 +34,23 @@ final class Live {
 
     /** Named by LiveSource.VERSION: a build that keeps other channels fetches them again at once. */
     static final String FILE = "live-" + LiveSource.VERSION + ".json";
-    private static final long REFRESH_MS = 6 * 3600_000L, RETRY_MS = 10 * 60_000L;
-    private static final ExecutorService fetcher = Executors.newSingleThreadExecutor();
-    private static boolean fetching, failed;
-    private static long tried, prefetched;
+    private static final long REFRESH_MS = 6 * 3600_000L, RETRY_MS = 60_000L, RETRY_MAX_MS = 30 * 60_000L;
+    /** Failed fetches are tried again by themselves this many times (about an hour); then at the next refresh. */
+    private static final int RETRIES = 6;
+    private static final ExecutorService fetcher = Net.serial("live");
+    private static boolean fetching, failed, loading;
+    private static long tried, prefetched, retryAfter = RETRY_MS;
+    private static int failures;
     private static String triedFor = "";
     private static final long IMAGE_BYTES = 60L << 20, PREFETCH_MS = 10 * 60_000L;
 
     static final class Show {
         long start, stop;
-        String title, desc, image;
+        String title = "", image = "";
     }
 
     static final class Channel {
-        String name, group, logo, url;
+        String name = "", group = "General", logo = "", url = "";
         final List<Show> shows = new ArrayList<>();
 
         /** What's on at `t`, or null (no guide for this channel, or a gap in it). */
@@ -67,54 +66,100 @@ final class Live {
         }
     }
 
-    private static List<Channel> channels = new ArrayList<>();
-    private static long loadedFrom = -1;
+    private static volatile List<Channel> channels = Collections.emptyList();
+    private static volatile boolean loaded;
 
-    /** The channels, A to Z (read again when the file changed). */
-    static synchronized List<Channel> channels(Context c) {
+    /** The channels, A to Z, as last read from live.json (empty until the first read, in the background, is done). */
+    static List<Channel> channels(Context c) {
+        if (!loaded) load(c.getApplicationContext(), null);
+        return channels;
+    }
+
+    /** The player, recreated in a fresh process, can't wait for the background read: it reads the file itself. */
+    static List<Channel> channelsNow(Context c) {
+        synchronized (Live.class) {
+            if (!loaded && !loading) read(c.getApplicationContext());
+        }
+        return channels;
+    }
+
+    /** Reads live.json on the fetcher's thread (once); `done`, if any, runs on the main thread after. */
+    private static synchronized void load(Context c, Runnable done) {
+        if (loaded || loading) return;
+        loading = true;
+        Handler main = new Handler(Looper.getMainLooper());
+        fetcher.execute(() -> {
+            read(c);
+            synchronized (Live.class) {
+                loading = false;
+            }
+            if (done != null) main.post(done);
+        });
+    }
+
+    private static void read(Context c) {
         File f = file(c);
-        long modified = f.exists() ? f.lastModified() : 0;
-        if (modified == loadedFrom) return channels;
-        loadedFrom = modified;
         List<Channel> out = new ArrayList<>();
-        if (modified != 0) {
-            try (FileInputStream in = new FileInputStream(f)) {
-                byte[] bytes = new byte[(int) f.length()];
-                int read = 0;
-                while (read < bytes.length) {
-                    int n = in.read(bytes, read, bytes.length - read);
-                    if (n < 0) break;
-                    read += n;
-                }
-                JSONArray list = new JSONObject(new String(bytes, 0, read, StandardCharsets.UTF_8)).getJSONArray("channels");
-                for (int i = 0; i < list.length(); i++) {
-                    JSONObject o = list.getJSONObject(i);
-                    Channel ch = new Channel();
-                    ch.name = o.optString("n");
-                    ch.group = o.optString("g", "General");
-                    ch.logo = o.optString("l");
-                    ch.url = o.optString("u");
-                    JSONArray p = o.optJSONArray("p");
-                    for (int j = 0; p != null && j < p.length(); j++) {
-                        JSONArray a = p.getJSONArray(j);
-                        Show s = new Show();
-                        s.start = a.getLong(0);
-                        s.stop = a.getLong(1);
-                        s.title = a.optString(2);
-                        s.desc = a.optString(3);
-                        s.image = a.optString(4);
-                        ch.shows.add(s);
+        if (f.exists()) {
+            try (JsonReader r = new JsonReader(new InputStreamReader(new BufferedInputStream(new FileInputStream(f)), StandardCharsets.UTF_8))) {
+                r.beginObject();
+                while (r.hasNext()) {
+                    if (!r.nextName().equals("channels")) {
+                        r.skipValue();
+                        continue;
                     }
-                    if (!ch.url.isEmpty()) out.add(ch);
+                    r.beginArray();
+                    while (r.hasNext()) {
+                        Channel ch = channel(r);
+                        if (!ch.url.isEmpty()) out.add(ch);
+                    }
+                    r.endArray();
                 }
-            } catch (Exception e) {
+                r.endObject();
+            } catch (IOException | RuntimeException e) {
                 AppLog.w("live: " + e.getMessage());
             }
         }
         Collections.sort(out, (a, b) -> a.name.compareToIgnoreCase(b.name));
         AppLog.w("live: " + out.size() + " channels");
-        channels = out;
-        return out;
+        channels = Collections.unmodifiableList(out);
+        loaded = true;
+    }
+
+    private static Channel channel(JsonReader r) throws IOException {
+        Channel ch = new Channel();
+        r.beginObject();
+        while (r.hasNext()) {
+            switch (r.nextName()) {
+                case "n": ch.name = string(r); break;
+                case "g": ch.group = string(r); break;
+                case "l": ch.logo = string(r); break;
+                case "u": ch.url = string(r); break;
+                case "p":
+                    r.beginArray();
+                    while (r.hasNext()) {
+                        Show s = new Show();
+                        r.beginArray();
+                        s.start = r.nextLong();
+                        s.stop = r.nextLong();
+                        s.title = string(r);
+                        while (r.hasNext()) s.image = string(r);   // older files have a description before it
+                        r.endArray();
+                        ch.shows.add(s);
+                    }
+                    r.endArray();
+                    break;
+                default: r.skipValue();
+            }
+        }
+        r.endObject();
+        return ch;
+    }
+
+    private static String string(JsonReader r) throws IOException {
+        if (r.peek() != JsonToken.NULL) return r.nextString();
+        r.nextNull();
+        return "";
     }
 
     private static File file(Context c) {
@@ -123,23 +168,35 @@ final class Live {
 
     /** What older builds fetched. */
     private static void dropOld(Context c) {
-        File[] old = c.getFilesDir().listFiles((dir, name) -> name.startsWith("live") && name.endsWith(".json") && !name.equals(FILE));
+        File[] old = c.getFilesDir().listFiles((dir, name) -> name.startsWith("live")
+                && (name.endsWith(".json") || name.endsWith(".json.sources")) && !name.startsWith(FILE));
         if (old != null) for (File f : old) f.delete();
     }
 
     /**
-     * Fetches the channels again in the background when there are none yet or they're older than REFRESH_MS (after a
-     * failure, not before RETRY_MS); `done` runs on the main thread when the new ones are there.
+     * Fetches the channels again in the background when there are none yet or they're older than REFRESH_MS; `done`
+     * runs on the main thread when the new ones are there (and after the first read of the saved ones). After a
+     * failure it tries again by itself, 1, 2, 4… minutes later (RETRIES times), and not sooner when asked.
      */
-    static synchronized void refresh(Context context, Runnable done) {
+    static void refresh(Context context, Runnable done) {
+        refresh(context, done, false);
+    }
+
+    /** The refresh button: the channels and guide fetched again now, however fresh, unless they're being fetched. */
+    static void refreshNow(Context context, Runnable done) {
+        refresh(context, done, true);
+    }
+
+    private static synchronized void refresh(Context context, Runnable done, boolean force) {
         Context c = context.getApplicationContext();
+        load(c, done);
         File f = file(c);
         long now = System.currentTimeMillis();
         // Other playlists or guides set on the phone page: fetched again at once.
         String sources = LiveSource.sources();
-        boolean changed = !sources.equals(c.getSharedPreferences("live", Context.MODE_PRIVATE).getString("sources", LiveSource.PLAYLIST + "\n\n" + LiveSource.GUIDE));
-        boolean retrying = now - tried < RETRY_MS && sources.equals(triedFor);
-        if (fetching || retrying || !changed && f.exists() && now - f.lastModified() < REFRESH_MS) {
+        boolean changed = !sources.equals(prefs(c).getString("sources", LiveSource.PLAYLIST + "\n\n" + LiveSource.GUIDE));
+        boolean retrying = now - tried < retryAfter && sources.equals(triedFor);
+        if (fetching || !force && (retrying || !changed && f.exists() && now - f.lastModified() < REFRESH_MS)) {
             if (!fetching && f.exists() && now - prefetched >= PREFETCH_MS) {
                 prefetched = now;
                 fetcher.execute(() -> prefetchFavourites(c));
@@ -154,18 +211,24 @@ final class Live {
             boolean ok = false;
             dropOld(c);
             try {
-                LiveSource.fetch(f);
-                c.getSharedPreferences("live", Context.MODE_PRIVATE).edit().putString("sources", sources).apply();
+                if (LiveSource.fetch(f) || !loaded) read(c);
+                prefs(c).edit().putString("sources", sources).apply();
                 ok = true;
             } catch (Exception e) {
                 AppLog.w("live: couldn't fetch the channels (" + e.getMessage() + ")");
             }
+            long again;
+            boolean retry;
             synchronized (Live.class) {
                 fetching = false;
                 failed = !ok;
                 if (ok) prefetched = System.currentTimeMillis();
+                failures = ok ? 0 : failures + 1;
+                again = retryAfter = Math.min(RETRY_MAX_MS, RETRY_MS << Math.min(5, Math.max(0, failures - 1)));
+                retry = !ok && failures <= RETRIES;
             }
             if (ok) main.post(done);
+            else if (retry) main.postDelayed(() -> refresh(c, done), again);
             if (ok) prefetchFavourites(c);
         });
     }
@@ -176,7 +239,7 @@ final class Live {
         if (fav.isEmpty()) return;
         long now = System.currentTimeMillis();
         int n = 0;
-        for (Channel ch : channels(c)) {
+        for (Channel ch : channels) {
             if (!fav.contains(ch.url)) continue;
             n += prefetch(c, ch, now);
         }
@@ -211,24 +274,9 @@ final class Live {
             f.setLastModified(System.currentTimeMillis());
             return f;
         }
-        //noinspection ResultOfMethodCallIgnored
-        f.getParentFile().mkdirs();
-        File part = new File(f.getPath() + "." + Thread.currentThread().getId() + ".part");
         try {
-            HttpURLConnection h = (HttpURLConnection) new URL(url).openConnection();
-            h.setConnectTimeout(8000);
-            h.setReadTimeout(15000);
-            try (InputStream in = h.getInputStream(); FileOutputStream out = new FileOutputStream(part)) {
-                byte[] buffer = new byte[16384];
-                int n;
-                while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
-            } finally {
-                h.disconnect();
-            }
-            if (!part.renameTo(f)) throw new IOException("couldn't save");
+            Net.download(url, f, 8000, 15000);
         } catch (IOException | RuntimeException e) {
-            //noinspection ResultOfMethodCallIgnored
-            part.delete();
             return null;
         }
         prune(f.getParentFile());

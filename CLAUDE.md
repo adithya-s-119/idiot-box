@@ -24,7 +24,6 @@ before you do it, and let them do the taps on the TV.
    after `tmdb_key=` in `config.properties` themselves, or add it later from their phone (Home Settings → Set up from
    your phone). Don't ask for it in the chat, never print it, never commit it. If they paste it in the chat anyway,
    put it only in `config.properties`. Without a key everything works except the TMDB picks.
-   The same goes for the optional `watchmode_key`.
 5. **Build:** `./build.sh` → `IdiotBox.apk`. Keep `idiotbox.keystore`: updates must be signed with the same key.
 6. **Install:** `adb connect <IP>:5555` (the TV asks *Allow USB debugging?*: tell them to accept and tick *Always
    allow*), then `adb install -r IdiotBox.apk`.
@@ -35,9 +34,13 @@ before you do it, and let them do the taps on the TV.
 7. **Tell them what setup does** before running it: Amazon's ad, promo and telemetry apps are turned off (never
    uninstalled), Idiot Box's accessibility service goes on (it opens Idiot Box over Amazon's home screen and closes the
    Alexa overlay), Idiot Box becomes the screensaver, and the music screensaver may read what's playing. `undo` brings
-   it all back. With their OK: `tools/firetv.sh <IP> setup`.
+   it all back. With their OK: `tools/firetv.sh <IP> setup`. Apps someone may use (Prime Video, which takes about
+   140 MB in the background) go off only when they ask: `tools/firetv.sh <IP> off <package>`; `undo` brings them back too.
 8. **They switch on the TV:** *Idiot Box* → *Home Screen* → *Idiot Box*. Don't switch modes from the computer.
-9. **Music** needs Prism (com.prism.music) installed; the Music tab browses and plays through it.
+9. **Music** needs a music app that shares its music, such as BitChord TV (com.music.bitchord.tv) or Prism
+   (com.prism.music): the Music tab browses and plays through it. With none picked under Home Settings → Music provider,
+   it uses whichever of those two is installed. The music screensaver fetches covers from YouTube and timed lyrics
+   from LRCLIB (lrclib.net).
 10. **Check:** `adb logcat -s IdiotBox` shows what the app did.
 
 **Removing it:** *Original* on the TV, then `tools/firetv.sh <IP> undo`, then `adb uninstall io.idiotbox`. Uninstalled
@@ -46,9 +49,9 @@ without `undo`? Install again and run `undo`: the Amazon apps stay off and the s
 ## The code
 
 - Java 8 language level, minSdk 26, targetSdk 33. No Gradle, no libraries: only the Android SDK.
-  Fire OS 7 is Android 9: no RenderNode (`Recording` wraps it, with a Picture there) and `Ui.LEGACY` is true there and
-  on Fire OS 8, so the home screen skips the GPU layers, draws blurred shadows from cached bitmaps (`Shadows`) and
-  rounds images with a shader instead of clipPath. No AGSL: `Scene` draws the background and glass flat.
+  `Ui.LEGACY` is true on both Fire OS 7 (Android 9) and 8 (Android 11), so the home screen skips the GPU layers, draws
+  blurred shadows from cached bitmaps (`Shadows`) and rounds images with a shader instead of clipPath. No AGSL:
+  `HomeView` draws the background and glass flat.
   Fire OS 8 (Android 11) runs the screensaver as `ScreensaverAlone`, in the main process (its DreamActivity needs the
   dream in the app's default process); `res/values-v30/bools.xml` picks it, Fire OS 7 keeps `Screensaver` in `:home`.
   Keep both in step.
@@ -59,22 +62,27 @@ without `undo`? Install again and run `undo`: the Amazon apps stay off and the s
   adbd never answers the device itself, so the app has no ADB: `HomeMode` only records the mode, which the service
   follows, and `tools/firetv.sh` does the rest from a computer.
 - The home screen is drawn by hand on one Canvas (`HomeView`). Keep it at 60 fps: no allocations in `onDraw`, no work on
-  the UI thread. The stick has about 1 GB of RAM: every MB counts.
+  the UI thread (HTTP goes through `Net`, on its background queues). The stick has about 1 GB of RAM: every MB counts.
 - `HomeMode` runs the switch as a background job (`ModeJob`) in the main process; the UI is in the `:home` process.
-  `Watchdog` gives Home back to Amazon after 3 crashes in 5 minutes (`homeReverted`, which `FireTvService` reads).
-- Settings (`SettingsActivity`) is a translucent activity: a glass sidebar that slides in over the home screen.
+  `Watchdog` gives Home back to Amazon after 3 crashes of the `:home` process in 5 minutes (`homeReverted`, which
+  `FireTvService` reads).
+- Settings (`SettingsActivity`) is a translucent activity: a sidebar that slides in over the home screen, on black
+  that fades out to the left.
 - On-screen text: `Ui.tr("English")`, translated from `app/assets/i18n/<lang>.json` (keyed by the English; one
   HashMap lookup, English when a language lacks it). Text built at runtime is a pattern: `Ui.trf("{n} min ago", "n", 12)`,
   never concatenated words. A key `"context|Text"` is the same English where a language may need another word
   (`"format|h:mm"` holds a SimpleDateFormat pattern). A count with a word is
   `Ui.plural("plural|one:{n} season|other:{n} seasons", n)`: each catalogue gives one form per CLDR plural category of
-  its language. Portuguese, Spanish, German and Russian are hand translations: the reference, edited by hand, never
+  its language. Portuguese, Spanish, German, Russian and Thai are hand translations: the reference, edited by hand, never
   replaced with machine ones. Dates and numbers use `Ui.locale()`. Text drawn every frame is cached and made again
   when `Ui.generation` changes. After changing text, run `python3 tools/translate.py`: it rebuilds `en.json` from the
   code and lists what each language lacks; translate those in every catalogue (or `--fill` with `ANTHROPIC_API_KEY`,
   which sends only the strings), keep placeholders as they are, and `--prune` what the code no longer uses.
   `python3 tools/translate.py --check` validates all catalogues. No right-to-left languages yet; CJK and Devanagari
   use the system font. Comments in English, short, only where the why isn't obvious.
+- `assets/fonts/InterVariable.ttf` is Inter 4 trimmed with fontTools (`pyftsubset`): Latin with Vietnamese, Greek,
+  Cyrillic and common punctuation and symbols, the features `calt,ccmp,locl,kern,mark,mkmk,tnum,case`, both axes whole.
+  A character it lacks comes from the system font.
 - Settings come from `config.properties` through the generated `out/gen/io/idiotbox/Config.java` (never edit that).
   What the person changes on the TV (`Prefs`: Home Settings, the phone page, Shelf) wins over those first values.
 - After any change, `./build.sh` must end with `Built IdiotBox.apk`.

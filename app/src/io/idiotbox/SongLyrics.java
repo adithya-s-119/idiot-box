@@ -7,21 +7,17 @@ import android.os.Looper;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -43,9 +39,13 @@ final class SongLyrics {
 
         /** The line sung at [ms], or −1 before the first. */
         int index(long ms) {
-            int i = -1;
-            for (int n = 0; n < at.length && at[n] <= ms; n++) i = n;
-            return i;
+            int lo = 0, hi = at.length;   // the first line starting after ms
+            while (lo < hi) {
+                int mid = (lo + hi) >>> 1;
+                if (at[mid] <= ms) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo - 1;
         }
     }
 
@@ -53,9 +53,14 @@ final class SongLyrics {
         void ready(String key, Lines lines);
     }
 
-    private static final ExecutorService io = Executors.newSingleThreadExecutor();
+    private static final ExecutorService io = Net.serial("lyrics");
     private static final Handler main = new Handler(Looper.getMainLooper());
-    private static final Map<String, Lines> known = new HashMap<>();
+    /** The songs looked up in this process (null: being looked up), the last 50. */
+    private static final Map<String, Lines> known = new LinkedHashMap<String, Lines>(64, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, Lines> eldest) {
+            return size() > 50;
+        }
+    };
     private static final Lines NONE = new Lines(new long[0], new String[0]);
     private static final Pattern STAMP = Pattern.compile("\\[(\\d+):(\\d+)(?:[.:](\\d+))?]");
 
@@ -73,7 +78,7 @@ final class SongLyrics {
         }
         File dir = new File(c.getApplicationContext().getCacheDir(), "lyrics");
         io.execute(() -> {
-            File f = new File(dir, Integer.toHexString(key.hashCode()) + "-" + key.length() + ".lrc");
+            File f = new File(dir, MusicArt.cacheName(key) + ".lrc");
             String lrc = null;
             try {
                 if (f.exists()) {
@@ -85,6 +90,7 @@ final class SongLyrics {
                     try (FileOutputStream out = new FileOutputStream(f)) {
                         out.write((lrc == null ? "" : lrc).getBytes(StandardCharsets.UTF_8));
                     }
+                    MusicArt.keepNewest(dir, 300);
                 }
             } catch (Exception e) {
                 AppLog.w("lyrics: " + e.getMessage());   // not kept on disk: asked again after a restart
@@ -126,27 +132,16 @@ final class SongLyrics {
     }
 
     /** The body of a 200 answer, or null (404: LRCLIB doesn't know the song). */
-    private static String get(String url) throws Exception {
-        HttpURLConnection h = (HttpURLConnection) new URL(url).openConnection();
-        h.setConnectTimeout(8000);
-        h.setReadTimeout(15000);
-        h.setRequestProperty("User-Agent", "IdiotBox");
+    private static String get(String url) throws IOException {
         try {
-            if (h.getResponseCode() != 200) return null;
-            try (InputStream in = h.getInputStream()) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                return new String(out.toByteArray(), StandardCharsets.UTF_8);
-            }
-        } finally {
-            h.disconnect();
+            return Net.getString(url, 8000, 15000);
+        } catch (Net.HttpError e) {
+            return null;
         }
     }
 
     /** "[01:23.45] words" lines; empty lines (pauses in the singing) are kept, so the words dim between verses. */
-    static Lines parse(String lrc) {
+    private static Lines parse(String lrc) {
         List<long[]> at = new ArrayList<>();
         List<String> text = new ArrayList<>();
         for (String raw : lrc.split("\n")) {

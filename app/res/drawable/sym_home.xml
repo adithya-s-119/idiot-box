@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Rounded "home" (Apache 2.0), cropped: tools/symbols.html builds it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="692.8dp" android:height="756.7dp"
+    android:viewportWidth="692.8" android:viewportHeight="756.7">
+    <group android:translateX="-133.9" android:translateY="850.6">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M145.87-185.09v-382.65q0-18.77 8.07-35.48 8.07-16.7 23.28-27.78l254.91-191.61q20.77-15.96 47.71-15.96t48.03 15.96L782.78-631q15.21 11.08 23.56 27.78 8.36 16.71 8.36 35.48v382.65q0 33.23-23.28 56.23-23.28 22.99-56.51 22.99H603q-16.71 0-28.16-11.45t-11.45-28.16v-218.3q0-16.71-11.45-28.16t-28.16-11.45h-87.56q-16.71 0-28.16 11.45t-11.45 28.16v218.3q0 16.71-11.45 28.16T357-105.87H225.09q-33.23 0-56.23-22.99-22.99-23-22.99-56.23Z" />
+    </group>
+</vector>

@@ -1,27 +1,32 @@
 package io.idiotbox;
 
+import android.util.JsonWriter;
 import android.util.Xml;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParser;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -40,17 +45,33 @@ final class LiveSource {
     /** Raised when what's kept changes (2: http streams too). */
     static final int VERSION = 2;
     static final String PLAYLIST = "https://iptv-org.github.io/iptv/countries/in.m3u";
+    /** The same file elsewhere (GitHub Pages' branch through jsDelivr's CDN, and GitHub itself), for when it doesn't answer. */
+    private static final String[] PLAYLIST_MIRRORS = {
+        "https://cdn.jsdelivr.net/gh/iptv-org/iptv@gh-pages/countries/in.m3u",
+        "https://raw.githubusercontent.com/iptv-org/iptv/gh-pages/countries/in.m3u",
+    };
+    /** Each download is tried this many times, a few seconds apart: some home connections drop one now and then. */
+    private static final int TRIES = 3;
+    private static final int CONNECT_MS = 15_000, READ_MS = 30_000;
     static final String GUIDE = "https://iptv-epg.org/files/epg-in.xml";
     private static final int MIN_HEIGHT = 720;
     private static final long HOURS = 26;
+    /**
+     * Unchanged sources aren't fetched again (the guide is tens of MB), but the file is built again after this long
+     * anyway: it only holds HOURS of programmes from when it was built.
+     */
+    private static final long REBUILD_MS = 12 * 3600_000L;
 
     private static final Pattern ATTR = Pattern.compile("([a-z-]+)=\"([^\"]*)\"");
     private static final Pattern HEIGHT = Pattern.compile("\\((\\d{3,4})p\\)");
+    private static final Pattern PREFIX = Pattern.compile("^\\s*in\\s*[-:|]\\s*"), BRACKETS = Pattern.compile("\\(.*?\\)|\\[.*?\\]"),
+            QUALITY = Pattern.compile("\\b(hd|sd|fhd|uhd|4k|india|tv)\\b"), OTHER = Pattern.compile("[^a-z0-9]"),
+            SPACES = Pattern.compile("\\s+");
 
     private static final class Entry {
         String name, group, logo, url, id, key;
         int height;
-        final List<Object[]> shows = new ArrayList<>();
+        final List<Live.Show> shows = new ArrayList<>();
     }
 
     /** The playlists and guides as one string: live.json is made again when it changes (Live). */
@@ -58,16 +79,35 @@ final class LiveSource {
         return String.join("\n", Prefs.playlists()) + "\n\n" + String.join("\n", Prefs.guides());
     }
 
-    /** Fetches them all and writes `out` (through a temporary file, so a reader never sees half of it). */
-    static void fetch(File out) throws Exception {
+    /**
+     * Fetches them all and writes `out` (through a temporary file, so a reader never sees half of it). False when no
+     * source changed since `out` was built: then `out` is only marked as fresh.
+     */
+    static boolean fetch(File out) throws Exception {
+        File remembered = new File(out.getPath() + ".sources");
+        if (unchanged(out, read(remembered))) {
+            //noinspection ResultOfMethodCallIgnored
+            out.setLastModified(System.currentTimeMillis());
+            AppLog.w("live: the playlists and guides haven't changed");
+            return false;
+        }
+        Properties answers = new Properties();
         Map<String, Entry> best = new LinkedHashMap<>();
         Exception failed = null;
         for (String url : Prefs.playlists()) {
-            try {
-                playlist(url, best);
-            } catch (Exception e) {
-                failed = e;
-                AppLog.w("live: no playlist " + url + " (" + e.getMessage() + ")");   // the others still count
+            boolean builtIn = url.equals(PLAYLIST);
+            List<String> copies = new ArrayList<>();
+            copies.add(url);
+            if (builtIn) copies.addAll(Arrays.asList(PLAYLIST_MIRRORS));
+            for (String copy : copies) {
+                try {
+                    playlist(copy, builtIn, best, copy.equals(url) ? answers : null);
+                    failed = null;
+                    break;
+                } catch (Exception e) {
+                    failed = e;
+                    AppLog.w("live: no playlist " + copy + " (" + e.getMessage() + ")");   // the others still count
+                }
             }
         }
         List<Entry> channels = new ArrayList<>(best.values());
@@ -77,33 +117,84 @@ final class LiveSource {
         }
         for (String url : Prefs.guides()) {
             try {
-                guide(url, channels);
+                guide(url, channels, answers);
             } catch (Exception e) {
                 AppLog.w("live: no guide " + url + " (" + e.getMessage() + ")");   // the channels still play
             }
         }
-        JSONArray list = new JSONArray();
         int guided = 0;
-        for (Entry ch : channels) {
-            JSONArray shows = new JSONArray();
-            ch.shows.sort((a, b) -> Long.compare((long) a[0], (long) b[0]));
-            for (Object[] s : ch.shows) shows.put(new JSONArray().put(s[0]).put(s[1]).put(s[2]).put(s[3]).put(s[4]));
-            if (shows.length() > 0) guided++;
-            list.put(new JSONObject().put("n", ch.name).put("g", ch.group).put("l", ch.logo).put("u", ch.url).put("p", shows));
-        }
         File tmp = new File(out.getPath() + ".tmp");
-        try (FileOutputStream o = new FileOutputStream(tmp)) {
-            o.write(new JSONObject().put("made", System.currentTimeMillis()).put("channels", list).toString()
-                    .getBytes(StandardCharsets.UTF_8));
+        try (JsonWriter w = new JsonWriter(new BufferedWriter(new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.UTF_8)))) {
+            w.beginObject().name("channels").beginArray();
+            for (Entry ch : channels) {
+                ch.shows.sort((a, b) -> Long.compare(a.start, b.start));
+                if (!ch.shows.isEmpty()) guided++;
+                w.beginObject().name("n").value(ch.name).name("g").value(ch.group).name("l").value(ch.logo).name("u").value(ch.url);
+                w.name("p").beginArray();
+                for (Live.Show s : ch.shows) w.beginArray().value(s.start).value(s.stop).value(s.title).value(s.image).endArray();
+                w.endArray().endObject();
+            }
+            w.endArray().endObject();
         }
         if (!tmp.renameTo(out)) throw new IllegalStateException("couldn't save " + out.getName());
+        answers.setProperty("sources", sources());
+        answers.setProperty("built", String.valueOf(System.currentTimeMillis()));
+        try (FileOutputStream o = new FileOutputStream(remembered)) {
+            answers.store(o, null);
+        }
         AppLog.w("live: fetched " + channels.size() + " channels (" + guided + " with the guide)");
+        return true;
+    }
+
+    private static Properties read(File f) {
+        Properties p = new Properties();
+        try (FileInputStream in = new FileInputStream(f)) {
+            p.load(in);
+        } catch (Exception ignored) {
+            // never fetched (or by an older build): everything is fetched
+        }
+        return p;
+    }
+
+    /** `out` was built from the same sources not long ago, and each of them answers that it hasn't changed since. */
+    private static boolean unchanged(File out, Properties before) {
+        long age;
+        try {
+            age = System.currentTimeMillis() - Long.parseLong(before.getProperty("built", "0"));
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        if (!out.exists() || !sources().equals(before.getProperty("sources")) || age < 0 || age >= REBUILD_MS) return false;
+        List<String> all = new ArrayList<>(Prefs.playlists());
+        all.addAll(Prefs.guides());
+        for (String url : all) {
+            String tag = before.getProperty("etag " + url), modified = before.getProperty("modified " + url);
+            if (tag == null && modified == null) return false;
+            try {
+                HttpURLConnection c = Net.connect(url, CONNECT_MS, READ_MS, TRIES, "If-None-Match", tag, "If-Modified-Since", modified);
+                try {
+                    if (c.getResponseCode() != HttpURLConnection.HTTP_NOT_MODIFIED) return false;
+                } finally {
+                    c.disconnect();
+                }
+            } catch (Exception e) {
+                return false;   // the full fetch says what went wrong
+            }
+        }
+        return true;
+    }
+
+    /** What `url` answered, to ask next time whether it changed (into `answers`, when not null). */
+    private static void remember(Properties answers, String url, HttpURLConnection c) {
+        if (answers == null) return;
+        String tag = c.getHeaderField("ETag"), modified = c.getHeaderField("Last-Modified");
+        if (tag != null) answers.setProperty("etag " + url, tag);
+        if (modified != null) answers.setProperty("modified " + url, modified);
     }
 
     /** The channels of the playlist at [url], into [best] (by name, the highest resolution kept). */
-    private static void playlist(String url, Map<String, Entry> best) throws Exception {
-        boolean builtIn = url.equals(PLAYLIST);
-        HttpURLConnection c = open(url);
+    private static void playlist(String url, boolean builtIn, Map<String, Entry> best, Properties answers) throws Exception {
+        HttpURLConnection c = Net.open(url, CONNECT_MS, READ_MS, TRIES);
         try (BufferedReader in = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
             String info = null, line;
             while ((line = in.readLine()) != null) {
@@ -115,6 +206,7 @@ final class LiveSource {
                     info = null;
                 }
             }
+            remember(answers, url, c);
         } finally {
             c.disconnect();
         }
@@ -147,25 +239,26 @@ final class LiveSource {
     }
 
     /** Streams the guide at [url] (tens of MB unpacked), keeping only the programmes of channels in the playlists. */
-    private static void guide(String url, List<Entry> channels) throws Exception {
+    private static void guide(String url, List<Entry> channels, Properties answers) throws Exception {
         Map<String, List<Entry>> byId = new HashMap<>(), byName = new HashMap<>();
         for (Entry ch : channels) {
             if (!ch.id.isEmpty()) byId.computeIfAbsent(ch.id, x -> new ArrayList<>()).add(ch);
             byName.computeIfAbsent(ch.key, x -> new ArrayList<>()).add(ch);
         }
         // A channel an earlier guide already filled keeps that one's programmes (two guides would show each twice).
-        Set<Entry> guided = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        Set<Entry> guided = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Entry ch : channels) if (!ch.shows.isEmpty()) guided.add(ch);
         long now = System.currentTimeMillis(), lo = now - 2 * 3600_000L, hi = now + HOURS * 3600_000L;
         SimpleDateFormat stamp = new SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US);
         Map<String, List<Entry>> matched = new HashMap<>();
-        HttpURLConnection c = open(url);
+        // Follows the guide's redirect (to a dated copy); gzip is asked for and unpacked by the connection itself.
+        HttpURLConnection c = Net.open(url, CONNECT_MS, READ_MS, TRIES);
         try (InputStream in = c.getInputStream()) {
             XmlPullParser x = Xml.newPullParser();
             x.setInput(in, "UTF-8");
             String channelId = null, programme = null, field = null;
             long start = 0, stop = 0;
-            String title = "", desc = "", image = "";
+            String title = "", image = "";
             for (int ev = x.getEventType(); ev != XmlPullParser.END_DOCUMENT; ev = x.next()) {
                 if (ev == XmlPullParser.START_TAG) {
                     String tag = x.getName();
@@ -185,19 +278,18 @@ final class LiveSource {
                         }
                         if (stop <= lo || start >= hi) continue;
                         programme = x.getAttributeValue(null, "channel");
-                        title = desc = image = "";
+                        title = image = "";
                     } else if ("icon".equals(tag) && programme != null) {
                         String src = x.getAttributeValue(null, "src");
                         if (src != null) image = secure(src);
-                    } else if (("title".equals(tag) || "desc".equals(tag)) && programme != null
-                            || "display-name".equals(tag) && channelId != null) {
+                    } else if ("title".equals(tag) && programme != null || "display-name".equals(tag) && channelId != null) {
                         field = tag;
                     }
                 } else if (ev == XmlPullParser.TEXT && field != null) {
                     String t = x.getText().trim();
-                    if ("title".equals(field)) title = t;
-                    else if ("desc".equals(field)) desc = t.length() > 160 ? t.substring(0, 160) : t;
-                    else if (!matched.containsKey(channelId)) {
+                    if ("title".equals(field)) {
+                        title = t;
+                    } else if (!matched.containsKey(channelId)) {
                         List<Entry> hit = byName.get(norm(t));   // no id in common: by name
                         if (hit != null) matched.put(channelId, hit);
                     }
@@ -208,30 +300,20 @@ final class LiveSource {
                     if ("channel".equals(tag)) {
                         channelId = null;
                     } else if ("programme".equals(tag) && programme != null) {
-                        Object[] show = {start, stop, title, desc, image};
+                        Live.Show show = new Live.Show();
+                        show.start = start;
+                        show.stop = stop;
+                        show.title = title;
+                        show.image = image;
                         for (Entry ch : matched.get(programme)) if (!guided.contains(ch)) ch.shows.add(show);
                         programme = null;
                     }
                 }
             }
+            remember(answers, url, c);
         } finally {
             c.disconnect();
         }
-    }
-
-    /** Follows the guide's redirect (to a dated copy); gzip is asked for and unpacked by the connection itself. */
-    private static HttpURLConnection open(String url) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(15_000);
-        c.setReadTimeout(30_000);
-        c.setInstanceFollowRedirects(true);
-        c.setRequestProperty("User-Agent", "IdiotBox");
-        int code = c.getResponseCode();
-        if (code != 200) {
-            c.disconnect();
-            throw new IllegalStateException(url + " answered " + code);
-        }
-        return c;
     }
 
     /** Images over https: Android blocks plain http, and the image hosts (Jio's, imgur) serve both. */
@@ -240,14 +322,14 @@ final class LiveSource {
     }
 
     /** 'IN - Aaj Tak HD (1080p) [Geo-blocked]' → 'aajtak': for matching playlist and guide names. */
-    static String norm(String name) {
-        String n = name.toLowerCase(Locale.ROOT).replaceFirst("^\\s*in\\s*[-:|]\\s*", "");
-        n = n.replaceAll("\\(.*?\\)|\\[.*?\\]", "").replaceAll("\\b(hd|sd|fhd|uhd|4k|india|tv)\\b", "");
-        return n.replaceAll("[^a-z0-9]", "");
+    private static String norm(String name) {
+        String n = PREFIX.matcher(name.toLowerCase(Locale.ROOT)).replaceFirst("");
+        n = QUALITY.matcher(BRACKETS.matcher(n).replaceAll("")).replaceAll("");
+        return OTHER.matcher(n).replaceAll("");
     }
 
     /** 'Aaj Tak HD (1080p) [Geo-blocked]' → 'Aaj Tak HD'. */
     private static String clean(String name) {
-        return name.replaceAll("\\(.*?\\)|\\[.*?\\]", "").replaceAll("\\s+", " ").trim();
+        return SPACES.matcher(BRACKETS.matcher(name).replaceAll("")).replaceAll(" ").trim();
     }
 }

@@ -3,27 +3,25 @@ package io.idiotbox;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.BitmapRegionDecoder;
 import android.graphics.BitmapShader;
 import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.os.Handler;
 import android.os.Looper;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * The pictures of the music screensaver for one song, made off the main thread (after Klangbild): the cover as a card
@@ -58,8 +56,12 @@ final class MusicArt {
     private static final float LIGHT_SIGMA_X = 360, LIGHT_SIGMA_Y = 180, LIGHT_ABOVE = 40, PEAK = 0.0088f, DARK_SHARE = 0.35f;
     private static final int MAP_W = 480, MAP_H = 270;
 
-    private static final ExecutorService io = Executors.newSingleThreadExecutor();
+    private static final ExecutorService io = Net.serial("music-art");
     private static final Handler main = new Handler(Looper.getMainLooper());
+    /**
+     * About 2.4 MB a scene at 1080p. Five: mid-turn the strip shows the song before, this one, the next, the one
+     * leaving and the one coming; fewer, and a card on screen loses its cover and waits for it again (the turn jumps).
+     */
     private static final Map<String, Scene> scenes = new LinkedHashMap<String, Scene>(8, 0.75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<String, Scene> eldest) {
             return size() > 5;
@@ -68,19 +70,36 @@ final class MusicArt {
 
     private MusicArt() {}
 
+    /** The last scene found: the home screen asks for the playing song's every frame (main thread only). */
+    private static Music.Track lastTrack;
+    private static float lastK;
+    private static Scene lastScene;
+
     /** The scene for [t] if it's made, else null (it's made and [ready] called on the main thread). */
     static Scene get(Context c, Music.Track t, float k, Ready ready) {
+        if (t == lastTrack && k == lastK && lastScene != null) return lastScene;
         String key = t.key() + "@" + k;
         synchronized (scenes) {
-            if (scenes.containsKey(key)) return scenes.get(key);
+            if (scenes.containsKey(key)) {
+                Scene s = scenes.get(key);
+                if (s != null) {
+                    lastTrack = t;
+                    lastK = k;
+                    lastScene = s;
+                }
+                return s;
+            }
             scenes.put(key, null);
         }
         Context app = c.getApplicationContext();
         io.execute(() -> {
             Scene s = null;
             try {
-                Bitmap cover = cover(app, t);
-                if (cover != null) s = make(cover, k);
+                Bitmap cover = cover(app, t, Math.round(CARD * k));
+                if (cover != null) {
+                    s = make(cover, k);
+                    if (cover != t.art) cover.recycle();   // the app's own picture stays its
+                }
             } catch (Exception | OutOfMemoryError e) {
                 AppLog.w("music art: " + e.getMessage());
             }
@@ -91,60 +110,92 @@ final class MusicArt {
         return null;
     }
 
+    /** The home screen is hidden: the scenes go (they're made again from the pictures on disk). */
+    static void trim() {
+        lastScene = null;
+        synchronized (scenes) {
+            scenes.values().removeIf(s -> s != null);   // one being made stays marked, or it would be made twice
+        }
+    }
+
     // MARK: - The cover
 
-    private static Bitmap cover(Context c, Music.Track t) {
+    /** The cover, at least [side] across where the picture allows. */
+    private static Bitmap cover(Context c, Music.Track t, int side) {
         String id = t.youtubeId();
         if (id != null) {
             for (String size : new String[] {"maxresdefault", "hq720", "sddefault"}) {
-                Bitmap b = load(c, "https://i.ytimg.com/vi/" + id + "/" + size + ".jpg");
+                Bitmap b = load(c, Music.youtubePicture(id, size), side);
                 if (b != null) return b;
             }
         }
         if (t.artUri.startsWith("http")) {
-            Bitmap b = load(c, t.artUri.replaceFirst("^http:", "https:"));
+            Bitmap b = load(c, t.artUri.replaceFirst("^http:", "https:"), side);
             if (b != null) return b;
         }
         return t.art;
     }
 
-    /** A picture from the web, kept in the cache folder; null if it's missing or YouTube's tiny "no picture". */
-    private static Bitmap load(Context c, String url) {
+    /**
+     * The middle square of a picture from the web (kept in the cache folder), decoded alone and halved while it stays
+     * [side] across; null if it's missing or YouTube's tiny "no picture".
+     */
+    private static Bitmap load(Context c, String url, int side) {
         File dir = new File(c.getCacheDir(), "music");
-        File f = new File(dir, Integer.toHexString(url.hashCode()) + "-" + url.length());
+        File f = new File(dir, cacheName(url));
         if (!f.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            dir.mkdirs();
-            File part = new File(f.getPath() + ".part");
             try {
-                HttpURLConnection h = (HttpURLConnection) new URL(url).openConnection();
-                h.setConnectTimeout(8000);
-                h.setReadTimeout(15000);
-                if (h.getResponseCode() != 200) {
-                    h.disconnect();
-                    return null;
-                }
-                try (InputStream in = h.getInputStream(); FileOutputStream out = new FileOutputStream(part)) {
-                    byte[] buf = new byte[16384];
-                    int n;
-                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                } finally {
-                    h.disconnect();
-                }
-                if (!part.renameTo(f)) return null;
-            } catch (Exception e) {
-                //noinspection ResultOfMethodCallIgnored
-                part.delete();
+                Net.download(url, f, 8000, 15000);
+            } catch (IOException e) {
                 return null;
             }
+            keepNewest(dir, 150);
         }
-        Bitmap b = BitmapFactory.decodeFile(f.getPath());
-        if (b == null || b.getWidth() < 300) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(f.getPath(), bounds);
+        Bitmap b = null;
+        if (bounds.outWidth >= 300) {
+            int s = Math.min(bounds.outWidth, bounds.outHeight), x = (bounds.outWidth - s) / 2, y = (bounds.outHeight - s) / 2;
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inSampleSize = 1;
+            while (s / (o.inSampleSize * 2) >= side) o.inSampleSize *= 2;
+            try {
+                BitmapRegionDecoder d = BitmapRegionDecoder.newInstance(f.getPath(), false);
+                try {
+                    b = d.decodeRegion(new Rect(x, y, x + s, y + s), o);
+                } finally {
+                    d.recycle();
+                }
+            } catch (Exception e) {
+                b = null;
+            }
+        }
+        if (b == null) {
             //noinspection ResultOfMethodCallIgnored
             f.delete();
-            return null;
         }
         return b;
+    }
+
+    /** A file name for [key] in a cache folder. */
+    static String cacheName(String key) {
+        return Integer.toHexString(key.hashCode()) + "-" + key.length();
+    }
+
+    /** Keeps the [n] newest files of a cache folder (the stick's storage is small; Android clears it only when full). */
+    static void keepNewest(File dir, int n) {
+        File[] files = dir.listFiles();
+        if (files == null || files.length <= n) return;
+        long[] at = new long[files.length];
+        for (int i = 0; i < files.length; i++) at[i] = files[i].lastModified();
+        long[] sorted = at.clone();
+        java.util.Arrays.sort(sorted);
+        long cut = sorted[files.length - n];   // older than the n-th newest goes
+        for (int i = 0; i < files.length; i++) {
+            //noinspection ResultOfMethodCallIgnored
+            if (at[i] < cut) files[i].delete();
+        }
     }
 
     // MARK: - The scene
@@ -164,10 +215,10 @@ final class MusicArt {
         a += (la - a) * 0.35f;
         b += (lb - b) * 0.35f;
         float[] lin = Oklab.toLinear(lch[0], a, b);
-        float peak = PEAK * (DARK_SHARE + (1 - DARK_SHARE) * smoothstep(0.05f, 0.35f, lab[0]));
+        float peak = PEAK * (DARK_SHARE + (1 - DARK_SHARE) * Ui.smoothstep(0.05f, 0.35f, lab[0]));
         Bitmap light = light(lin, peak, k);
         int accent = Oklab.argb(lin[0], lin[1], lin[2]);
-        if (square != cover) square.recycle();
+        square.recycle();
         return new Scene(card, side, light, accent);
     }
 
@@ -178,7 +229,7 @@ final class MusicArt {
         Bitmap out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(out);
         Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
-        c.drawBitmap(src, new android.graphics.Rect(x, y, x + s, y + s), new RectF(0, 0, side, side), p);
+        c.drawBitmap(src, new Rect(x, y, x + s, y + s), new RectF(0, 0, side, side), p);
         return out;
     }
 
@@ -238,7 +289,7 @@ final class MusicArt {
     }
 
     private static float lerp(float a, float b, float t) {
-        return a + (b - a) * Math.max(0, Math.min(1, t));
+        return a + (b - a) * Ui.clamp(t);
     }
 
     /** How much of pixel ([x], [y]) the rounded corners of a [side] square with radius [r] cover, at its top edge. */
@@ -247,7 +298,7 @@ final class MusicArt {
         float cx = x < r ? r : x >= side - r ? side - r : -1;
         if (cx < 0) return 1;
         float dx = x + 0.5f - cx, dy = y + 0.5f - r;
-        return Math.max(0, Math.min(1, r - (float) Math.hypot(dx, dy) + 0.5f));
+        return Ui.clamp(r - (float) Math.hypot(dx, dy) + 0.5f);
     }
 
     /** The mean colour (linear) of the top sixteenth of the cover: the light it throws upward. */
@@ -280,13 +331,13 @@ final class MusicArt {
         Random dither = new Random(19);
         for (int j = 0; j < MAP_H; j++) {
             float py = (j + 0.5f) * sy;
-            float wall = smoothstep(floor, top + 0.35f * CARD, py);
-            float edgeY = smoothstep(72, 192, Math.min(py, h - py));
+            float wall = Ui.smoothstep(floor, top + 0.35f * CARD, py);
+            float edgeY = Ui.smoothstep(72, 192, Math.min(py, h - py));
             for (int i = 0; i < MAP_W; i++) {
                 float pxl = (i + 0.5f) * sx;
                 float u = (pxl - cx) / LIGHT_SIGMA_X, v = (py - cy) / LIGHT_SIGMA_Y;
-                float column = 1 - smoothstep(COLUMN - 440, COLUMN - 60, pxl);
-                float fade = smoothstep(72, 312, Math.min(pxl, w - pxl)) * edgeY;
+                float column = 1 - Ui.smoothstep(COLUMN - 440, COLUMN - 60, pxl);
+                float fade = Ui.smoothstep(72, 312, Math.min(pxl, w - pxl)) * edgeY;
                 float value = (float) Math.exp(-0.5f * (u * u + v * v)) * fade * wall * column * scale;
                 float d = dither.nextFloat() - 0.5f;
                 px[j * MAP_W + i] = 0xFF000000 | (Oklab.toByte(tint[0] * value, d) << 16) | (Oklab.toByte(tint[1] * value, d) << 8)
@@ -298,10 +349,6 @@ final class MusicArt {
         return out;
     }
 
-    static float smoothstep(float e0, float e1, float x) {
-        float t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
-        return t * t * (3 - 2 * t);
-    }
 
     /** A warm 2700 to 3000 K bulb's hue (Klangbild's lamp), for covers whose edge has no colour. */
     private static final float LAMP_HUE = (float) Math.toRadians(70);

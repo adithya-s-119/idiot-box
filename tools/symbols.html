@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Idiot Box symbols</title>
+<!-- Builds app/res/drawable/sym_<name>.xml, the icons `Symbols` draws, as Android vectors: Material Symbols Rounded
+     (Apache 2.0, weight 600, 48 px optical size) from google/material-design-icons, each cropped to its shape plus a
+     small margin. Open it in a browser (online) and save each XML it shows. Units: the symbol's 960-unit em; a vector's
+     dp size is its viewport's, so `Symbols` can tell the em from the intrinsic size. -->
+<style>
+  body { margin: 0; padding: 32px; background: #0B0B0E; color: #9a9aa5; font: 14px system-ui, sans-serif; }
+  .row { display: flex; gap: 16px; align-items: center; margin: 6px 0; }
+  svg { background: #17171C; }
+  textarea { flex: 1; height: 60px; background: #17171C; color: #F4F4F6; border: 1px solid #2A2A31; }
+  a { color: #F5C451; }
+</style>
+</head>
+<body>
+<div id="list"></div>
+<script>
+  const BASE = 'https://raw.githubusercontent.com/google/material-design-icons/master/symbols/web';
+  // name used in the app -> (Material Symbols name, filled?)
+  const MAP = {
+    sunny: ['sunny', 1], clear_night: ['clear_night', 1], partly_cloudy_day: ['partly_cloudy_day', 1],
+    partly_cloudy_night: ['partly_cloudy_night', 1], cloud: ['cloud', 1], foggy: ['foggy', 1], rainy: ['rainy', 1],
+    thunderstorm: ['thunderstorm', 1], snowflake: ['ac_unit', 0], bedtime: ['bedtime', 1],
+    tv: ['tv', 0], gamepad: ['sports_esports', 1], hdmi: ['settings_input_hdmi', 1], live_tv: ['live_tv', 1],
+    apps: ['apps', 1], settings: ['settings', 1], speaker: ['speaker', 1], sparkles: ['auto_awesome', 1],
+    home: ['home', 1], bell: ['notifications', 1], sync: ['sync', 0], check: ['check', 0], play: ['play_arrow', 1],
+    tv_settings: ['display_settings', 1], chevron_right: ['chevron_right', 0], refresh: ['refresh', 0],
+  };
+  const PAD = 12;   // the margin around each shape, in em units (as the old PNGs had)
+  const n = (v) => +v.toFixed(1);
+  const list = document.getElementById('list');
+
+  async function symbol(name, [material, fill]) {
+    const url = `${BASE}/${material}/materialsymbolsrounded/${material}_wght600${fill ? 'fill1' : ''}_48px.svg`;
+    const text = await (await fetch(url)).text();
+    const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+    const d = doc.querySelector('path').getAttribute('d');
+    // Most are drawn in a 960-unit em; a few older ones in 48 (no viewBox): scaled to 960.
+    const root = doc.documentElement, em = root.viewBox.baseVal && root.viewBox.baseVal.width || +root.getAttribute('width');
+    const s = 960 / em;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d); path.setAttribute('fill', '#F4F4F6');
+    if (s !== 1) path.setAttribute('transform', `scale(${s})`);
+    svg.appendChild(path);
+    const row = document.createElement('div'); row.className = 'row';
+    row.appendChild(svg); list.appendChild(row);
+    const b = path.getBBox();
+    const x = b.x * s - PAD, y = b.y * s - PAD, w = n(b.width * s + 2 * PAD), h = n(b.height * s + 2 * PAD);
+    svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`); svg.setAttribute('width', w / 10); svg.setAttribute('height', h / 10);
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Rounded "${material}" (Apache 2.0), cropped: tools/symbols.html builds it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="${w}dp" android:height="${h}dp"
+    android:viewportWidth="${w}" android:viewportHeight="${h}">
+    <group android:translateX="${n(-x)}" android:translateY="${n(-y)}"${s !== 1 ? ` android:scaleX="${s}" android:scaleY="${s}"` : ''}>
+        <path android:fillColor="#FFFFFFFF" android:pathData="${d}" />
+    </group>
+</vector>
+`;
+    const area = document.createElement('textarea'); area.readOnly = true; area.value = xml;
+    const link = document.createElement('a'); link.textContent = `sym_${name}.xml`; link.download = `sym_${name}.xml`;
+    link.href = 'data:text/xml;base64,' + btoa(xml);
+    row.append(link, area);
+    return [name, xml];
+  }
+
+  Promise.all(Object.entries(MAP).map(([name, m]) => symbol(name, m)))
+    .then((all) => { window.symbols = Object.fromEntries(all); })
+    .catch((e) => { window.symbols = { error: String(e) }; });
+</script>
+</body>
+</html>

@@ -21,20 +21,28 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Idiot Box's music engine: Prism (com.prism.music, a YouTube Music app, as it is), reached through Android's own
- * media browser (the one it offers Android Auto): its Home's sections, then its Made for you mixes and Recently played;
- * a search, through media compat (see search); and playing a song by its media id. It plays in the background with
- * nothing shown. Answers are kept for a while, so the Music tab's rows come back at once. Everything here runs on the
- * main thread.
+ * The Music tab's engine: the music app picked as the provider (Prefs.musicProvider; with none picked, BitChord TV or
+ * Prism when one is on the TV), reached through Android's own media browser (the one apps offer Android Auto). Its rows
+ * are the folders at the top of what it shares (or, as Prism does, one grid with a heading over each section); a search
+ * goes through media compat (see search); a song plays by its media id, in the background with nothing shown. Only
+ * apps that share their music can be picked (findProviders): Spotify, for one, answers other apps with an empty list.
+ * Answers are kept for a while, so the Music tab's rows come back at once. Everything here runs on the main thread.
  */
 final class MusicEngine {
     private MusicEngine() {}
 
-    static final String PKG = "com.prism.music";
-    /** The heading Prism puts over each of Home's sections, when its Home is one grid (media3's group title). */
+    /** Prism (a YouTube Music app) lays its Home out its own way: see shelves. */
+    private static final String PRISM = "com.prism.music";
+    /** Used when no provider was picked, the first one on the TV. */
+    private static final String[] KNOWN = {"com.music.bitchord.tv", PRISM};
+    /** Stands for the root of what the app shares, whatever it calls it. */
+    private static final String ROOT = "\u0000root";
+    /** The heading an app puts over each section, when what it shares is one grid (media3's group title). */
     private static final String GROUP_TITLE = "android.media.browse.CONTENT_STYLE_GROUP_TITLE_HINT";
-    private static final String ART = "content://" + PKG + ".artwork/";
     private static final long KEEP_MS = 30 * 60_000L, EMPTY_KEEP_MS = 60_000L, SEARCH_WAIT_MS = 20_000L;
+    /** How long "is the provider on the TV" is trusted: the home screen asks every frame, the package manager is a binder call. */
+    private static final long AVAILABLE_MS = 30_000L;
+    private static final Handler main = new Handler(Looper.getMainLooper());
 
     /**
      * One song, or one album, playlist, mix or artist of a shelf: as the engine describes it, and its media id there
@@ -42,19 +50,13 @@ final class MusicEngine {
      */
     static final class Result {
         final String title, line, image, videoId, mediaId;
-        final long duration;        // ms, or 0 when not known (the engine's lists don't say)
         final boolean playlist;
 
-        Result(String title, String line, String image, String videoId, long duration, String mediaId) {
-            this(title, line, image, videoId, duration, mediaId, false);
-        }
-
-        Result(String title, String line, String image, String videoId, long duration, String mediaId, boolean playlist) {
+        Result(String title, String line, String image, String videoId, String mediaId, boolean playlist) {
             this.title = title;
             this.line = line;
             this.image = image;
             this.videoId = videoId;
-            this.duration = duration;
             this.mediaId = mediaId;
             this.playlist = playlist;
         }
@@ -70,7 +72,7 @@ final class MusicEngine {
 
         /** The picture for a card: YouTube's wide one for the video (no black bars), else the engine's. */
         String picture() {
-            return videoId != null ? "https://i.ytimg.com/vi/" + videoId + "/hq720.jpg" : image;
+            return videoId != null ? Music.youtubePicture(videoId, "hq720") : image;
         }
     }
 
@@ -88,26 +90,122 @@ final class MusicEngine {
         void ready();
     }
 
-    /** Is the engine on the TV? */
+    /** The provider's package: the one picked, else the first known one found on the TV, else "". */
+    static String pkg() {
+        String picked = Prefs.musicProvider();
+        return picked.isEmpty() ? fallback : picked;
+    }
+
+    private static boolean available;
+    private static long availableAt;
+    /** The known provider used while none is picked (found by available). */
+    private static String fallback = "";
+
+    /** Is there a provider, still on the TV (with its media browser)? */
     static boolean available(Context c) {
-        try {
-            c.getPackageManager().getPackageInfo(PKG, 0);
-            return true;
-        } catch (Exception e) {
-            return false;
+        long now = SystemClock.elapsedRealtime();
+        if (availableAt == 0 || now - availableAt > AVAILABLE_MS) {
+            availableAt = now;
+            if (Prefs.musicProvider().isEmpty()) {
+                fallback = "";
+                for (String known : KNOWN) {
+                    if (service(c, known) != null) {
+                        fallback = known;
+                        break;
+                    }
+                }
+            }
+            available = !pkg().isEmpty() && service(c, pkg()) != null;
+        }
+        return available;
+    }
+
+    /** The provider's name as the TV shows it ("" without one). */
+    static String name(Context c) {
+        String pkg = pkg();
+        return pkg.isEmpty() ? "" : Music.appName(c, pkg);
+    }
+
+    /** An app's media browser (Prism has one per launcher icon it offers, one enabled: the one Android finds), or null. */
+    private static ComponentName service(Context c, String pkg) {
+        List<android.content.pm.ResolveInfo> found = c.getPackageManager().queryIntentServices(
+                new android.content.Intent("android.media.browse.MediaBrowserService").setPackage(pkg), 0);
+        return found.isEmpty() ? null : new ComponentName(pkg, found.get(0).serviceInfo.name);
+    }
+
+    /**
+     * The apps on the TV that share their music, as {package, name}, to `done` (on the main thread): each one with a
+     * media browser is asked for what it shares, and kept if it lists something (Spotify accepts, then lists nothing).
+     */
+    static void findProviders(Context context, Consumer<List<String[]>> done) {
+        Context c = context.getApplicationContext();
+        List<String> pkgs = new ArrayList<>();
+        for (android.content.pm.ResolveInfo r : c.getPackageManager().queryIntentServices(
+                new android.content.Intent("android.media.browse.MediaBrowserService"), 0)) {
+            String pkg = r.serviceInfo.packageName;
+            if (!pkg.equals(c.getPackageName()) && !pkgs.contains(pkg)) pkgs.add(pkg);
+        }
+        List<String[]> found = new ArrayList<>();
+        int[] left = {pkgs.size()};
+        if (pkgs.isEmpty()) {
+            done.accept(found);
+            return;
+        }
+        for (String pkg : pkgs) {
+            boolean[] over = new boolean[1];
+            MediaBrowser[] b = new MediaBrowser[1];
+            Consumer<Boolean> answer = shares -> {
+                if (over[0]) return;
+                over[0] = true;
+                if (b[0] != null && b[0].isConnected()) b[0].disconnect();
+                if (shares) found.add(new String[] {pkg, Music.appName(c, pkg)});
+                if (--left[0] == 0) {
+                    java.util.Collections.sort(found, (x, y) -> x[1].compareToIgnoreCase(y[1]));
+                    done.accept(found);
+                }
+            };
+            b[0] = new MediaBrowser(c, service(c, pkg), new MediaBrowser.ConnectionCallback() {
+                @Override public void onConnected() {
+                    b[0].subscribe(b[0].getRoot(), new MediaBrowser.SubscriptionCallback() {
+                        @Override public void onChildrenLoaded(String parent, List<MediaBrowser.MediaItem> children) {
+                            answer.accept(!children.isEmpty());
+                        }
+
+                        @Override public void onError(String parent) {
+                            answer.accept(false);
+                        }
+                    });
+                }
+
+                @Override public void onConnectionFailed() {
+                    answer.accept(false);
+                }
+            }, hints());
+            b[0].connect();
+            main.postDelayed(() -> answer.accept(false), 8_000);   // an app that never answers isn't one
         }
     }
 
-    /** Prism's media browser: it has one per launcher icon it offers, one enabled: the one Android finds. */
-    private static ComponentName service(Context c) {
-        List<android.content.pm.ResolveInfo> found = c.getPackageManager().queryIntentServices(
-                new android.content.Intent("android.media.browse.MediaBrowserService").setPackage(PKG), 0);
-        return found.isEmpty() ? null : new ComponentName(PKG, found.get(0).serviceInfo.name);
+    /** Another provider was picked: what was asked of the last one goes. */
+    static void providerChanged() {
+        if (browser != null && browser.isConnected()) browser.disconnect();
+        browser = null;
+        compat = null;
+        connecting = false;
+        waiting.clear();
+        shelves = new ArrayList<>();
+        shelvesAt = 0;
+        askingShelves = false;
+        refreshing = false;
+        tiles.clear();
+        answers.clear();
+        answeredAt.clear();
+        availableAt = 0;
     }
 
     /** A picture's web address: Prism hands out its own content:// ones, each holding the address it stands for. */
     private static String webArt(String uri) {
-        if (!uri.startsWith(ART)) return uri;
+        if (!uri.startsWith("content://" + PRISM + ".artwork/")) return uri.startsWith("http") ? uri : "";
         String encoded = android.net.Uri.parse(uri).getLastPathSegment();
         try {
             String url = new String(android.util.Base64.decode(encoded, android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP), java.nio.charset.StandardCharsets.UTF_8);
@@ -133,7 +231,7 @@ final class MusicEngine {
         }
         waiting.add(then);
         if (connecting) return;
-        ComponentName service = service(c);
+        ComponentName service = pkg().isEmpty() ? null : service(c, pkg());
         if (service == null) {
             AppLog.w("music: the engine has no media browser");
             unanswered();
@@ -190,7 +288,7 @@ final class MusicEngine {
             AppLog.w("music: the engine didn't say how to search it");
             return;
         }
-        if (replies == null) replies = new Messenger(new Handler(Looper.getMainLooper()));
+        if (replies == null) replies = new Messenger(main);
         Bundle data = new Bundle();
         data.putString("data_package_name", c.getPackageName());
         data.putInt("data_calling_pid", Process.myPid());
@@ -235,7 +333,7 @@ final class MusicEngine {
                 once.accept(null);
                 return;
             }
-            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            main.postDelayed(() -> {
                 if (!answered[0]) AppLog.w("music: the engine didn't answer the search for “" + query + "”");
                 once.accept(null);
             }, SEARCH_WAIT_MS);
@@ -274,7 +372,7 @@ final class MusicEngine {
             search(c, id.substring("search/".length()), done);
             return;
         }
-        withBrowser(c, () -> browser.subscribe(id, new MediaBrowser.SubscriptionCallback() {
+        withBrowser(c, () -> browser.subscribe(ROOT.equals(id) ? browser.getRoot() : id, new MediaBrowser.SubscriptionCallback() {
             @Override public void onChildrenLoaded(String parentId, List<MediaBrowser.MediaItem> children) {
                 if (browser != null) browser.unsubscribe(parentId);
                 done.accept(children);
@@ -310,8 +408,9 @@ final class MusicEngine {
     }
 
     /**
-     * YouTube Music's Home shelves as known now (empty at first); asked for when stale, [ready] when they come: Prism's
-     * Home's sections (sections), then its Made for you mixes and Recently played.
+     * The provider's rows as known now (empty at first); asked for when stale, [ready] when they come. Prism: its Home's
+     * sections (sections), then its Made for you mixes and Recently played. Any other app: the sections of its root when
+     * that's one grid, else each folder at its root.
      */
     static List<Shelf> shelves(Context c, Ready ready) {
         if (!askingShelves && (shelvesAt == 0 || SystemClock.elapsedRealtime() - shelvesAt > KEEP_MS) && available(c)) {
@@ -331,6 +430,23 @@ final class MusicEngine {
                 AppLog.w("music: " + list.size() + " home shelves from the engine: " + titles);
                 ready.ready();
             };
+            if (!PRISM.equals(pkg())) {
+                browse(c, ROOT, items -> {
+                    if (items == null) {
+                        found.accept(null);
+                        return;
+                    }
+                    List<Shelf> list = sections(items);
+                    if (list.isEmpty()) {
+                        for (MediaBrowser.MediaItem m : items) {
+                            CharSequence t = m.getDescription().getTitle();
+                            if (m.isBrowsable() && m.getMediaId() != null && t != null) list.add(new Shelf(m.getMediaId(), t.toString()));
+                        }
+                    }
+                    found.accept(list);
+                });
+                return shelves;
+            }
             browse(c, "home", items -> {
                 if (items == null) {
                     found.accept(null);
@@ -426,13 +542,13 @@ final class MusicEngine {
                 android.net.Uri icon = m.getDescription().getIconUri();
                 String image = icon == null ? "" : webArt(icon.toString());
                 if (m.isBrowsable()) {   // an album, playlist, mix or artist: played from its first song
-                    found.add(new Result(t.toString(), s == null ? "" : s.toString(), image, null, 0, mediaId, true));
+                    found.add(new Result(t.toString(), s == null ? "" : s.toString(), image, null, mediaId, true));
                     continue;
                 }
                 if (!m.isPlayable() || isListAction(mediaId)) continue;
                 String videoId = mediaId.substring(mediaId.lastIndexOf('/') + 1);
                 found.add(new Result(t.toString(), s == null ? "" : s.toString(), image,
-                        videoId.matches("[A-Za-z0-9_-]{11}") ? videoId : null, 0, mediaId));
+                        Music.isVideoId(videoId) ? videoId : null, mediaId, false));
             }
             answers.put(id, found);
             if (found.isEmpty()) {

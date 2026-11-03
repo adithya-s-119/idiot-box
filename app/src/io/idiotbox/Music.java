@@ -1,6 +1,7 @@
 package io.idiotbox;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.media.MediaDescription;
 import android.media.MediaMetadata;
@@ -10,9 +11,10 @@ import android.media.session.PlaybackState;
 import android.os.Bundle;
 import android.os.SystemClock;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Pattern;
 
@@ -76,12 +78,16 @@ final class Music {
             shownArtist = shown[1];
         }
 
-        /** The same art, text and length, another length. */
+        /** The same art, text and length, another length (and the media id given, when it has none). */
         private Track(Track t, long duration) {
+            this(t, duration, t.mediaId);
+        }
+
+        private Track(Track t, long duration, String mediaId) {
             app = t.app;
             title = t.title;
             artist = t.artist;
-            mediaId = t.mediaId;
+            this.mediaId = mediaId;
             artUri = t.artUri;
             this.duration = duration;
             art = t.art;
@@ -106,8 +112,30 @@ final class Music {
 
         /** A YouTube video id (the engine's media id), or null. */
         String youtubeId() {
-            return mediaId.matches("[A-Za-z0-9_-]{11}") ? mediaId : null;
+            return isVideoId(mediaId) ? mediaId : null;
         }
+    }
+
+    private static final Pattern VIDEO_ID = Pattern.compile("[A-Za-z0-9_-]{11}");
+
+    /** Is [s] a YouTube video id? */
+    static boolean isVideoId(String s) {
+        return VIDEO_ID.matcher(s).matches();
+    }
+
+    /** YouTube's picture for a video at one of its sizes ("hq720", "maxresdefault"…). */
+    static String youtubePicture(String videoId, String size) {
+        return "https://i.ytimg.com/vi/" + videoId + "/" + size + ".jpg";
+    }
+
+    /**
+     * The same song: the same media id, or, when either report lacks one, the same title and artist. A session can
+     * send the playing song with its id in one report and without it in the next.
+     */
+    static boolean same(Track a, Track b) {
+        if (a == null || b == null || !a.app.equals(b.app)) return false;
+        if (!a.mediaId.isEmpty() && !b.mediaId.isEmpty()) return a.mediaId.equals(b.mediaId);
+        return a.title.equals(b.title) && a.artist.equals(b.artist);
     }
 
     interface Listener {
@@ -123,13 +151,29 @@ final class Music {
     private static float speed = 1f;
     /** When it last stopped playing (uptime), or 0 while it plays. */
     private static long stoppedAt;
-    /** The song heard before this one (the cover flow's left side when the app shares no queue). */
-    private static final List<Track> before = new ArrayList<>();
-    private static final int BEFORE = 1;   // the song before, nothing more
+    /** The song heard before this one (the cover flow's left side when the app shares no queue), or null. */
+    private static Track before;
     /** Where the song is in the app's queue, and which way the last change went there (1 on, −1 back). */
     private static int queueAt = -1, queueMove = 1;
     /** The last song's length (ms), while the app may still report it for the new one; 0 once it can't. */
     private static long staleDuration;
+    /** When the song last changed (uptime), and how soon after it a report of the song before is only an echo. */
+    private static long changedAt;
+    private static final long ECHO_MS = 4000;
+    /**
+     * The song Idiot Box last asked its engine for, and the song playing then: it stands for what plays while the app
+     * names no song (BitChord TV, for some songs, publishes none), until the app names one other than that one.
+     */
+    private static Track asked;
+    private static String askedOver;
+    private static long askedAt;
+    private static final long ASKED_MS = 15 * 60_000L;
+
+    static void asked(Track t) {
+        asked = t;
+        askedOver = track == null ? null : track.key();
+        askedAt = SystemClock.uptimeMillis();
+    }
 
     static void addListener(Listener l) {
         listeners.add(l);
@@ -159,17 +203,24 @@ final class Music {
         return track != null && track.duration > 0 ? Math.min(p, track.duration) : p;
     }
 
-    static List<Track> before() {
+    static Track before() {
         return before;
     }
 
-    /** The app's name, for the status line. */
-    static String appName(android.content.Context c, String pkg) {
+    private static final Map<String, String> names = new ConcurrentHashMap<>();
+
+    /** The app's name, for the status line; "" when it isn't installed. Kept once found (it's drawn every frame). */
+    static String appName(Context c, String pkg) {
+        String name = names.get(pkg);
+        if (name != null) return name;
         try {
-            return c.getPackageManager().getApplicationLabel(c.getPackageManager().getApplicationInfo(pkg, 0)).toString();
+            PackageManager pm = c.getPackageManager();
+            name = pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString();
         } catch (Exception e) {
             return "";
         }
+        names.put(pkg, name);
+        return name;
     }
 
     /** From NowPlaying: the session to follow now (the one playing, else the last one heard), or null when none is left. */
@@ -178,22 +229,37 @@ final class Music {
         MediaMetadata m = c == null ? null : c.getMetadata();
         PlaybackState s = c == null ? null : c.getPlaybackState();
         Track t = m == null ? null : new Track(c.getPackageName(), m);
-        if (t != null && t.title.isEmpty()) t = null;   // a song without a title yet: no change until the app says
+        if (t != null && t.title.isEmpty()) {
+            // No title: the song asked for, if this app was asked for one lately; else no change until the app says.
+            boolean ours = asked != null && asked.app.equals(t.app) && SystemClock.uptimeMillis() - askedAt < ASKED_MS;
+            t = ours ? new Track(asked, t.duration) : null;
+        } else if (t != null && asked != null && !t.key().equals(askedOver)) {
+            asked = null;   // the app names its song again
+        }
+        // Right after a change, the session can report the song it left once more while the next one loads: that's
+        // not a step back (unless back was asked for), so the screen doesn't flick between the two.
+        boolean echo = t != null && !same(t, track) && same(t, before)
+                && SystemClock.uptimeMillis() - changedAt < ECHO_MS && commandMove() >= 0;
+        if (echo) {
+            AppLog.w("music: ignored an echo of \u201c" + t.shownTitle + "\u201d");
+            return;
+        }
         // A new song comes with the last one's length until the app's player has loaded it (a report or two): not known.
-        if (t != null && track != null && !t.key().equals(track.key()) && track.duration > 0) staleDuration = track.duration;
+        if (t != null && track != null && !same(t, track) && track.duration > 0) staleDuration = track.duration;
         if (t != null && t.duration > 0 && t.duration == staleDuration) t = new Track(t, 0);
         else if (t != null && t.duration > 0) staleDuration = 0;   // its own length: the old one won't come again
-        if (t != null && track != null && t.key().equals(track.key()) && t.duration <= 0 && track.duration > 0) {
-            t = new Track(t, track.duration);   // the same song while the app reloads: its length is still known
+        if (t != null && same(t, track)) {
+            // The same song: its length stays known while the app reloads, and its id stays (screens key on it).
+            long duration = t.duration <= 0 && track.duration > 0 ? track.duration : t.duration;
+            String id = t.mediaId.isEmpty() ? track.mediaId : t.mediaId;
+            if (duration != t.duration || !id.equals(t.mediaId)) t = new Track(t, duration, id);
         }
-        if (t != null && (track == null || !t.key().equals(track.key()))) {
+        if (t != null && (track == null || !same(t, track))) {
+            changedAt = SystemClock.uptimeMillis();
             int at = queueIndex();
             queueMove = at >= 0 && queueAt >= 0 && at < queueAt ? -1 : 1;
             queueAt = at;
-            if (track != null) {
-                before.add(0, track);
-                while (before.size() > BEFORE) before.remove(before.size() - 1);
-            }
+            if (track != null) before = track;
             track = t;
             AppLog.w("music: \u201c" + t.shownTitle + "\u201d by " + t.shownArtist + " in " + t.app + ", " + t.duration / 1000 + " s");
         } else if (t != null && (t.duration != track.duration || track.looksDifferent(t))) {
@@ -248,7 +314,7 @@ final class Music {
 
     /** What the engine says is either side of which song, once per change (the screensaver's sides come from it). */
     private static void logNeighbours(MediaController c) {
-        if (c == null || !MusicEngine.PKG.equals(c.getPackageName())) return;
+        if (c == null || !MusicEngine.pkg().equals(c.getPackageName())) return;
         Bundle e = c.getExtras();
         Bundle prev = e == null ? null : e.getBundle("queue_prev"), next = e == null ? null : e.getBundle("queue_next");
         String line = e == null ? "no extras" : "at " + e.getString("queue_current") + " (playing "
@@ -266,7 +332,7 @@ final class Music {
         List<MediaSession.QueueItem> q = queue();
         int at = queueIndex();
         if (q == null || at < 0 || t == null) return false;
-        return new Track(controller.getPackageName(), q.get(at).getDescription()).key().equals(t.key());
+        return same(new Track(controller.getPackageName(), q.get(at).getDescription()), t);
     }
 
     /** Does the app share its queue (with the song in it)? */
@@ -274,24 +340,17 @@ final class Music {
         return queueIndex() >= 0 || neighbours() != null;
     }
 
-    /**
-     * Up to [n] songs of the app's queue on one side of the playing one, the nearest first: [side] −1 before it, 1 after it.
-     */
-    static List<Track> queued(int side, int n) {
-        List<Track> out = new ArrayList<>();
+    /** The song of the app's queue next to the playing one, [side] −1 before it, 1 after it; null if none. */
+    static Track queued(int side) {
         List<MediaSession.QueueItem> q = queue();
         Bundle extras = q == null ? neighbours() : null;
         if (extras != null) {   // the engine: one song on each side
             Bundle b = extras.getBundle(side < 0 ? "queue_prev" : "queue_next");
-            if (b != null && n > 0) out.add(new Track(controller.getPackageName(), b));
-            return out;
+            return b == null ? null : new Track(controller.getPackageName(), b);
         }
-        int at = queueIndex();
-        if (q == null || at < 0) return out;
-        for (int i = at + side; i >= 0 && i < q.size() && out.size() < n; i += side) {
-            out.add(new Track(controller.getPackageName(), q.get(i).getDescription()));
-        }
-        return out;
+        int at = queueIndex(), i = at + side;
+        if (q == null || at < 0 || i < 0 || i >= q.size()) return null;
+        return new Track(controller.getPackageName(), q.get(i).getDescription());
     }
 
     /** Which way the last song change went in the app's queue: 1 on to the next song, −1 back. */
@@ -336,10 +395,11 @@ final class Music {
             "\\s*[(\\[][^)\\]]*(official|video|audio|lyric|visuali[sz]er|\\bhd\\b|\\b4k\\b|\\bmv\\b|m/v|full song)[^)\\]]*[)\\]]",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern BAR = Pattern.compile("\\s+[|｜].*$");
+    private static final Pattern TOPIC = Pattern.compile("\\s*-\\s*Topic$"), VEVO = Pattern.compile("VEVO$");
 
     /** Title and artist as a person would write them. */
     static String[] tidy(String title, String artist) {
-        String a = artist.replaceAll("\\s*-\\s*Topic$", "").replaceAll("VEVO$", "").trim();
+        String a = VEVO.matcher(TOPIC.matcher(artist).replaceAll("")).replaceAll("").trim();
         String t = BAR.matcher(DRESSING.matcher(title).replaceAll("")).replaceAll("").trim();
         int dash = t.indexOf(" - ") >= 0 ? t.indexOf(" - ") : t.indexOf(" – ");
         if (dash > 0) {

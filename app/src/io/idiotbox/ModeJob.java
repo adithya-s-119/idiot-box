@@ -39,8 +39,8 @@ public class ModeJob extends JobService {
         return false;
     }
 
-    /** Schedules a job (one pending per action: a new request replaces the old one). */
-    static void schedule(Context c, String action, String mode, long delayMs) {
+    /** Schedules a job, to run at once (one pending per action: a new request replaces the old one). */
+    static void schedule(Context c, String action, String mode) {
         JobScheduler scheduler = c.getSystemService(JobScheduler.class);
         if (scheduler == null) return;
         PersistableBundle extras = new PersistableBundle();
@@ -48,8 +48,7 @@ public class ModeJob extends JobService {
         extras.putString("mode", mode == null ? "" : mode);
         JobInfo.Builder job = new JobInfo.Builder(1000 + Math.abs(action.hashCode() % 1000),
                 new ComponentName(c, ModeJob.class)).setExtras(extras);
-        if (delayMs > 0) job.setMinimumLatency(delayMs);
-        job.setOverrideDeadline(delayMs + 2_000);
+        job.setOverrideDeadline(2_000);
         scheduler.schedule(job.build());
     }
 }

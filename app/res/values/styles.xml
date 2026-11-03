@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The light background already in the window: opening the home screen never flashes another color. -->
-    <color name="home_background">#EBEBF0</color>
+    <!-- The home screen's dark ground already in the window: opening it (the Live TV button, Home) never flashes
+         another color before its first frame. -->
+    <color name="home_background">#0B0B0E</color>
 
     <style name="IdiotBox.Home" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
         <item name="android:windowBackground">@color/home_background</item>

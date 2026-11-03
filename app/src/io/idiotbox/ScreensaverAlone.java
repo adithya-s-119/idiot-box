@@ -6,4 +6,8 @@ package io.idiotbox;
  * copy, in the main process; every other version keeps Screensaver in :home (app/res/values-v30/bools.xml).
  */
 public class ScreensaverAlone extends Screensaver {
+    /** The main process: no watchdog, or a crash of FireTvService or a mode switch would count as the home screen's. */
+    @Override boolean inHomeProcess() {
+        return false;
+    }
 }

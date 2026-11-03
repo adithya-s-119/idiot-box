@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Fire TV only. Window changes, and window content only to see whether Alexa's overlay is still open. -->
+<!-- Fire TV only. Window changes of the three apps FireTvService acts on (Amazon's home, the Alexa overlay, ours), and
+     window content only to see whether Alexa's overlay is still open. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged"
+    android:packageNames="com.amazon.tv.launcher,com.amazon.vizzini,io.idiotbox"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"

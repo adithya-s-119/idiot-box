@@ -13,7 +13,6 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.os.SystemClock;
-import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
@@ -58,6 +57,8 @@ final class MusicSaverView extends View implements Music.Listener {
         /** When it sets off; a card whose cover isn't made yet doesn't exist, and sets off once it is. */
         long start;
         final boolean leaving;
+        /** Its cover once made (kept here: asking MusicArt every frame builds its key every frame). */
+        MusicArt.Scene scene;
 
         Card(Music.Track track, float from, float to, long start, long length, boolean leaving) {
             this.track = track;
@@ -69,13 +70,15 @@ final class MusicSaverView extends View implements Music.Listener {
         }
     }
 
-    /** One song's words as set: each line laid out for the column, and where it stands in the list. */
+    /** One song's words as set: each line laid out for the column (with its own paint), and where it stands in the list. */
     private static final class Words {
+        final TextPaint paint;
         final StaticLayout[] lines;
         final float[] top;
         final float[] height;
 
-        Words(StaticLayout[] lines, float[] top, float[] height) {
+        Words(TextPaint paint, StaticLayout[] lines, float[] top, float[] height) {
+            this.paint = paint;
             this.lines = lines;
             this.top = top;
             this.height = height;
@@ -86,9 +89,13 @@ final class MusicSaverView extends View implements Music.Listener {
     private float k = 1;
     private final List<Card> cards = new ArrayList<>();
     private Music.Track shown, leaving, next;
+    private MusicArt.Scene shownScene;
     private long changedAt = -1;      // uptime of the last song change (−1: none to animate)
     private long turnEnd;             // when the strip's last turn is over (a new side card waits for it)
     private long lightAt = -1;
+    // The one pending redraw while nothing moves: postInvalidateDelayed from every frame would start a new chain at
+    // each outside invalidate() (a song update, a cover), and the chains add up.
+    private final Runnable later = this::invalidate;
     private MusicArt.Scene lightBefore;
     private float pause = 0;          // 0 playing … 1 paused, eased
     private long pauseFrom;
@@ -97,9 +104,15 @@ final class MusicSaverView extends View implements Music.Listener {
     // The text of the song shown and of the one leaving.
     private StaticLayout title, titleLeaving;
     private String artist = "", artistLeaving = "", status = "", foot = "", upNext = "", upNextLabel = "";
-    private SongLyrics.Lines lyrics;
+    /** The words shown (both set together, once laid out), and the ones being laid out. */
+    private SongLyrics.Lines lyrics, wantedLyrics;
     private Words words;
+    private int wordsGeneration;
     private int lyricIndex = -1;
+    // Text drawn every frame, made again only when it changes.
+    private String statusLine, positionText = "", endText = "";
+    private long statusMinute = -1, positionSecond = -1, endFor = -1;
+    private float endWidth, upNextX;
     private float glideFrom, glideTo;
     private long glideAt = -1;
 
@@ -150,7 +163,7 @@ final class MusicSaverView extends View implements Music.Listener {
         lyricPaint.setLetterSpacing(-0.01f);
         if (shown != null) setText(shown);
         setNext();
-        if (lyrics != null) words = layWords(lyrics);
+        setLyrics(wantedLyrics);
     }
 
     private static TextPaint textPaint(android.graphics.Typeface face, float size, int color) {
@@ -165,10 +178,11 @@ final class MusicSaverView extends View implements Music.Listener {
 
     @Override public void musicChanged() {
         Music.Track t = Music.track();
-        if (t != null && (shown == null || !t.key().equals(shown.key()))) change(t);
+        if (t != null && (shown == null || !Music.same(t, shown))) change(t);
         else if (t != null) {   // the same song, now with its length, its fuller details or picture, or what comes after it
             boolean words = !t.shownTitle.equals(shown.shownTitle) || !t.shownArtist.equals(shown.shownArtist);
             shown = t;
+            shownScene = null;
             if (words && titlePaint != null) setText(t);   // in place: no turn, the cards stay
             refreshSides();
         }
@@ -194,19 +208,19 @@ final class MusicSaverView extends View implements Music.Listener {
         List<Card> strip = new ArrayList<>();
         if (first) {
             strip.add(new Card(t, 0, 0, now - TURN_MS, TURN_MS, false));
-            List<Music.Track> heard = Music.before();
-            if (!Music.hasQueue() && !heard.isEmpty()) strip.add(new Card(heard.get(0), -1, -1, now - TURN_MS, TURN_MS, false));
+            Music.Track heard = Music.before();
+            if (!Music.hasQueue() && heard != null) strip.add(new Card(heard, -1, -1, now - TURN_MS, TURN_MS, false));
             turnEnd = now;
         } else {
             int dir = direction(t);
             Card came = find(dir), old = find(0);
-            if (came != null && !came.track.key().equals(t.key())) came = null;   // not the song on that side: in from it
-            strip.add(new Card(t, came != null ? position(came, now) : dir, 0, now, TURN_MS, false));
-            if (old != null) strip.add(new Card(old.track, position(old, now), -dir, now, TURN_MS, false));
+            if (came != null && !Music.same(came.track, t)) came = null;   // not the song on that side: in from it
+            strip.add(keep(new Card(t, came != null ? position(came, now) : dir, 0, now, TURN_MS, false), came));
+            if (old != null) strip.add(keep(new Card(old.track, position(old, now), -dir, now, TURN_MS, false), old));
             for (Card c : cards) {   // the rest goes, off at its side
                 if (c.leaving || c == came || c == old) continue;
                 float from = position(c, now), side = Math.signum(from);
-                strip.add(new Card(c.track, from, (side == 0 ? -dir : side) * EDGE, now, TURN_MS, true));
+                strip.add(keep(new Card(c.track, from, (side == 0 ? -dir : side) * EDGE, now, TURN_MS, true), c));
             }
             turnEnd = now + TURN_MS;
         }
@@ -217,26 +231,20 @@ final class MusicSaverView extends View implements Music.Listener {
         leaving = shown;
         titleLeaving = title;
         artistLeaving = artist;
-        MusicArt.Scene old = shown == null ? null : scene(shown);
+        MusicArt.Scene old = shown == null ? null : shownScene();
         shown = t;
+        shownScene = null;
         changedAt = first ? -1 : now;   // the words and the light (the cards keep their own times)
         lightBefore = old;
         lightAt = first ? -1 : now;
-        lyrics = SongLyrics.get(context, t, (key, lines) -> {
-            if (shown != null && shown.key().equals(key)) {
-                lyrics = lines;
-                words = layWords(lines);
-                lyricIndex = -1;
-                invalidate();
-            }
-        });
-        words = lyrics == null ? null : layWords(lyrics);
-        lyricIndex = -1;
+        setLyrics(SongLyrics.get(context, t, (key, lines) -> {
+            if (shown != null && shown.key().equals(key)) setLyrics(lines);
+        }));
         if (titlePaint != null) {
             setText(t);
             setNext();
         }
-        scene(t);
+        shownScene();
         refreshSides();   // what the app already says of this song's neighbours
     }
 
@@ -249,8 +257,8 @@ final class MusicSaverView extends View implements Music.Listener {
     /** Which way the strip turns to [t]: 1 when it was the card after, −1 when it was the one before. */
     private int direction(Music.Track t) {
         Card after = find(1), before = find(-1);
-        if (after != null && after.track.key().equals(t.key())) return 1;
-        if (before != null && before.track.key().equals(t.key())) return -1;
+        if (after != null && Music.same(after.track, t)) return 1;
+        if (before != null && Music.same(before.track, t)) return -1;
         int pressed = Music.commandMove();
         if (pressed != 0) return pressed;
         return Music.hasQueue() ? Music.queueMove() : 1;
@@ -266,16 +274,15 @@ final class MusicSaverView extends View implements Music.Listener {
         long now = SystemClock.uptimeMillis();
         boolean changed = false;
         for (int side = -1; side <= 1; side += 2) {
-            List<Music.Track> want = Music.queued(side, 1);
-            if (want.isEmpty()) continue;
-            Music.Track wanted = want.get(0);
+            Music.Track wanted = Music.queued(side);
+            if (wanted == null) continue;
             Card showing = find(side);
-            if (showing != null && showing.track.key().equals(wanted.key())) continue;
+            if (showing != null && Music.same(showing.track, wanted)) continue;
             changed = true;
             long out = Math.max(now, turnEnd);
             if (showing != null) {
                 cards.remove(showing);
-                cards.add(new Card(showing.track, position(showing, now), 0, now, SWAP_MS, true));
+                cards.add(keep(new Card(showing.track, position(showing, now), 0, now, SWAP_MS, true), showing));
                 out = Math.max(out, now + SWAP_MS);
             }
             cards.add(new Card(wanted, 0, side, out, SWAP_MS, false));
@@ -287,14 +294,26 @@ final class MusicSaverView extends View implements Music.Listener {
         invalidate();
     }
 
+    /** [fresh], the same song as [from] in a new place, with the cover [from] already has (null: none to carry). */
+    private static Card keep(Card fresh, Card from) {
+        if (from != null && fresh.scene == null) fresh.scene = from.scene;
+        return fresh;
+    }
+
     /** Where [card] is now on its way (a card that hasn't started is where it starts). */
     private static float position(Card card, long now) {
         float t = card.length <= 0 ? 1 : Math.max(0, Math.min(1, (now - card.start) / (float) card.length));
         return card.from + (card.to - card.from) * TURN.getInterpolation(t);
     }
 
-    private MusicArt.Scene scene(Music.Track t) {
-        return MusicArt.get(context, t, k, this::sceneReady);
+    private MusicArt.Scene scene(Card card) {
+        if (card.scene == null) card.scene = MusicArt.get(context, card.track, k, this::sceneReady);
+        return card.scene;
+    }
+
+    private MusicArt.Scene shownScene() {
+        if (shownScene == null) shownScene = MusicArt.get(context, shown, k, this::sceneReady);
+        return shownScene;
     }
 
     /** A cover made: the song's own light, if it comes after the change's crossfade, fades in rather than appears. */
@@ -312,6 +331,7 @@ final class MusicSaverView extends View implements Music.Listener {
                 .setMaxLines(2).setEllipsize(TextUtils.TruncateAt.END).setLineSpacing(0, 1.05f).setIncludePad(false).build();
         artist = TextUtils.ellipsize(t.shownArtist, artistPaint, COL_W * k, TextUtils.TruncateAt.END).toString();
         status = Music.appName(context, t.app);
+        statusLine = null;
         foot = TextUtils.ellipsize(t.shownTitle + " · " + t.shownArtist, smallPaint, COL_W * k, TextUtils.TruncateAt.END).toString();
     }
 
@@ -319,26 +339,50 @@ final class MusicSaverView extends View implements Music.Listener {
     private void setNext() {
         if (smallPaint == null) return;
         upNextLabel = Ui.tr("Up next");
+        upNextX = smallPaint.measureText(upNextLabel + "   ");
         upNext = next == null ? "" : TextUtils.ellipsize(next.shownTitle + " · " + next.shownArtist, smallPaint,
-                COL_W * k - smallPaint.measureText(upNextLabel + "   "), TextUtils.TruncateAt.END).toString();
+                COL_W * k - upNextX, TextUtils.TruncateAt.END).toString();
+    }
+
+    /**
+     * The words for the song shown (null: none), laid out off the main thread (a song has a hundred lines or so, and
+     * they come during the turn); until then, the column.
+     */
+    private void setLyrics(SongLyrics.Lines l) {
+        int generation = ++wordsGeneration;
+        wantedLyrics = l;
+        lyrics = null;
+        words = null;
+        lyricIndex = -1;
+        if (l == null || lyricPaint == null) return;
+        TextPaint paint = new TextPaint(lyricPaint);
+        int width = Math.round(COL_W * k);
+        new Thread(() -> {
+            Words laid = layWords(l, paint, width);
+            post(() -> {
+                if (generation != wordsGeneration) return;
+                lyrics = l;
+                words = laid;
+                invalidate();
+            });
+        }, "lyrics-layout").start();
     }
 
     /** Lyrics.kt: 30 sp lines (60 px), 0.8 em between them, each taking the rows it needs. */
-    private Words layWords(SongLyrics.Lines l) {
-        if (lyricPaint == null) return null;
+    private static Words layWords(SongLyrics.Lines l, TextPaint paint, int width) {
         int n = l.text.length;
         StaticLayout[] out = new StaticLayout[n];
         float[] top = new float[n], height = new float[n];
-        float y = 0, gap = 0.8f * lyricPaint.getTextSize();
+        float y = 0, gap = 0.8f * paint.getTextSize();
         for (int i = 0; i < n; i++) {
             String s = l.text[i].isEmpty() ? "♪" : l.text[i];
-            out[i] = StaticLayout.Builder.obtain(s, 0, s.length(), lyricPaint, Math.round(COL_W * k))
+            out[i] = StaticLayout.Builder.obtain(s, 0, s.length(), paint, width)
                     .setLineSpacing(0, 1.12f).setIncludePad(false).setMaxLines(4).setEllipsize(TextUtils.TruncateAt.END).build();
             top[i] = y;
             height[i] = out[i].getHeight();
             y += height[i] + gap;
         }
-        return new Words(out, top, height);
+        return new Words(paint, out, top, height);
     }
 
     // MARK: - Drawing
@@ -363,8 +407,9 @@ final class MusicSaverView extends View implements Music.Listener {
         else moving |= drawColumn(c, now);
         c.restoreToCount(save);
         if (withWords) drawEdge(c);
+        removeCallbacks(later);
         if (moving) postInvalidateOnAnimation();
-        else postInvalidateDelayed(250);   // the progress and the clock
+        else postDelayed(later, Music.playing() ? 250 : 1000);   // the progress (still while paused) and the clock
     }
 
     /** Klangbild's OLED care: a slow Lissajous path, ±8 px, at most a pixel every few seconds, whole pixels only. */
@@ -374,7 +419,7 @@ final class MusicSaverView extends View implements Music.Listener {
     }
 
     private boolean drawLight(Canvas c, long now) {
-        MusicArt.Scene s = scene(shown);
+        MusicArt.Scene s = shownScene();
         float t = lightAt < 0 ? 1 : Math.min(1, (now - lightAt) / (float) LIGHT_MS);
         float dim = 1 - pause * (1 - 0.45f);
         if (lightBefore != null && t < 1) drawMap(c, lightBefore.light, (1 - DIMMER.getInterpolation(t)) * dim);
@@ -399,7 +444,7 @@ final class MusicSaverView extends View implements Music.Listener {
             Card a = cards.get(i);
             if (a.leaving && now >= a.start + a.length) {   // gone
                 cards.remove(i);
-            } else if (scene(a.track) == null) {
+            } else if (scene(a) == null) {
                 a.start = Math.max(a.start, now);   // no cover yet: it waits where it starts (the cover's arrival redraws)
             } else if (now < a.start + a.length) {
                 moving = true;
@@ -425,17 +470,18 @@ final class MusicSaverView extends View implements Music.Listener {
         for (int i = 0; i < n; i++) {
             Card card = cards.get(order[i]);
             if (now < card.start) continue;   // not set off yet (behind the middle card)
-            drawCard(c, card, at[order[i]], 1);   // cards going out beyond the ends fade by their place
+            drawCard(c, card, at[order[i]]);
         }
         return moving;
     }
 
-    private void drawCard(Canvas c, Card card, float p, float alpha) {
-        MusicArt.Scene s = scene(card.track);
+    /** One card at place [p]; cards going out beyond the ends fade by their place. */
+    private void drawCard(Canvas c, Card card, float p) {
+        MusicArt.Scene s = scene(card);
         if (s == null) return;
         float a = Math.abs(p);
         if (a >= EDGE) return;
-        float x, z, angle, light;
+        float x, z, angle, light, alpha = 1;
         if (a <= 1) {
             x = FIRST_X * a;
             z = SIDE_Z * a;
@@ -488,15 +534,19 @@ final class MusicSaverView extends View implements Music.Listener {
             smallPaint.setColor(Ui.alpha(MUTED, alphaNew[2]));
             c.drawText(upNextLabel, left, base, smallPaint);
             smallPaint.setColor(Ui.alpha(QUIET, alphaNew[2]));
-            c.drawText(upNext, left + smallPaint.measureText(upNextLabel + "   "), base, smallPaint);
+            c.drawText(upNext, left + upNextX, base, smallPaint);
         }
         return moving;
     }
 
     private void drawStatus(Canvas c, float left, float hang, float alpha) {
-        String line = Ui.clock(System.currentTimeMillis()) + (status.isEmpty() ? "" : " · " + status);
+        long now = System.currentTimeMillis(), minute = now / 60_000;
+        if (statusLine == null || minute != statusMinute) {
+            statusMinute = minute;
+            statusLine = Ui.clock(now) + (status.isEmpty() ? "" : " · " + status);
+        }
         smallPaint.setColor(Ui.alpha(QUIET, alpha));
-        c.drawText(line, left, hang + Ui.cap(smallPaint), smallPaint);
+        c.drawText(statusLine, left, hang + Ui.cap(smallPaint), smallPaint);
     }
 
     /** Title, artist, then the bar and its times, centred on the cover; each with its own alpha and rise (a change). */
@@ -520,7 +570,8 @@ final class MusicSaverView extends View implements Music.Listener {
         }
         y += artistPaint.getFontSpacing() + barGap;
         if (alpha[2] > 0 && track == shown) {
-            float w = COL_W * k, done = track.duration > 0 ? Ui.clamp(Music.position() / (float) track.duration) : 0;
+            long position = Music.position();
+            float w = COL_W * k, done = track.duration > 0 ? Ui.clamp(position / (float) track.duration) : 0;
             float by = y + rise[2];
             fill.setShader(null);
             fill.setColor(Ui.alpha(0x29EDEDEF, alpha[2]));
@@ -529,9 +580,17 @@ final class MusicSaverView extends View implements Music.Listener {
             c.drawRoundRect(left, by, left + w * done, by + barH, barH / 2, barH / 2, fill);
             smallPaint.setColor(Ui.alpha(QUIET, alpha[2]));
             float base = by + barH + labelGap + smallCap;
-            c.drawText(time(Music.position()), left, base, smallPaint);
-            String end = time(track.duration);
-            c.drawText(end, left + w - smallPaint.measureText(end), base, smallPaint);
+            if (position / 1000 != positionSecond) {
+                positionSecond = position / 1000;
+                positionText = time(position);
+            }
+            if (track.duration != endFor) {
+                endFor = track.duration;
+                endText = time(track.duration);
+                endWidth = smallPaint.measureText(endText);
+            }
+            c.drawText(positionText, left, base, smallPaint);
+            c.drawText(endText, left + w - endWidth, base, smallPaint);
         }
     }
 
@@ -571,9 +630,9 @@ final class MusicSaverView extends View implements Music.Listener {
             float d = Math.abs(n - g);
             float a = d < 1 ? 0.94f - 0.52f * d : d < 2 ? 0.42f - 0.18f * (d - 1) : d < 3 ? 0.24f - 0.16f * (d - 2) : Math.max(0, 0.08f - 0.08f * (d - 3));
             // Gone by the time any of it reaches the edge: a line is never shown cut through its letters.
-            a *= MusicArt.smoothstep(clipTop, clipTop + fade, y) * (1 - MusicArt.smoothstep(clipBottom - fade, clipBottom, y + h));
+            a *= Ui.smoothstep(clipTop, clipTop + fade, y) * (1 - Ui.smoothstep(clipBottom - fade, clipBottom, y + h));
             if (a <= 0) continue;
-            lyricPaint.setColor(Ui.alpha(0xFFEDEDEF, a * textDim));
+            words.paint.setColor(Ui.alpha(0xFFEDEDEF, a * textDim));
             c.save();
             c.translate(left, y);
             words.lines[n].draw(c);
@@ -591,7 +650,7 @@ final class MusicSaverView extends View implements Music.Listener {
 
     /** With the words, the progress runs along the screen's bottom edge in the light's colour, glowing softly. */
     private void drawEdge(Canvas c) {
-        MusicArt.Scene s = scene(shown);
+        MusicArt.Scene s = shownScene();
         int accent = s == null ? 0xFFAC7A4B : s.accent;
         float w = getWidth(), h = getHeight(), line = 4 * k;
         float done = shown.duration > 0 ? Ui.clamp(Music.position() / (float) shown.duration) : 0;
@@ -608,7 +667,7 @@ final class MusicSaverView extends View implements Music.Listener {
         glow(c, 0, from, dim, h, line);
         for (int i = 0; i < TIP_SLICES; i++) {
             float x0 = from + (to - from) * i / TIP_SLICES, x1 = from + (to - from) * (i + 1) / TIP_SLICES;
-            glow(c, x0, x1, dim * (1 - MusicArt.smoothstep(0, 1, (i + 0.5f) / TIP_SLICES)), h, line);
+            glow(c, x0, x1, dim * (1 - Ui.smoothstep(0, 1, (i + 0.5f) / TIP_SLICES)), h, line);
         }
         fill.setShader(null);
         fill.setColor(Ui.alpha(accent, 0.16f * dim));

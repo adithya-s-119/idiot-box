@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Idiot Box art</title>
+<!-- Draws the app icon (192 × 192) and the TV banner (640 × 360): open it in a browser (online, for the Poppins
+     font) and save each image as app/res/drawable-nodpi/icon.png and banner.png. The icon is the goofy face (two
+     mismatched eyes, a flat amber mouth); the banner the "idiotbox" wordmark in Poppins Bold, its two o's filled in as
+     the same eyes and the mouth under it, among faint googly eyes. -->
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700&amp;display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; padding: 32px; background: #0B0B0E; color: #9a9aa5; font: 14px system-ui, sans-serif; }
+  canvas { display: block; margin: 8px 0 24px; }
+  a { color: #F5C451; }
+</style>
+</head>
+<body>
+<div>Icon: <a id="icon-link" download="icon.png" href="#">save icon.png</a></div>
+<canvas id="icon" width="192" height="192"></canvas>
+<div>Banner: <a id="banner-link" download="banner.png" href="#">save banner.png</a></div>
+<canvas id="banner" width="640" height="360"></canvas>
+<script>
+  const TILE = '#17171C', CREAM = '#F4F4F6', AMBER = '#F5C451';
+
+  // The face in a 100 × 100 box at (x, y), `size` px: the same drawing as the logo's.
+  function face(g, x, y, size, mouth) {
+    const s = size / 100;
+    const circle = (cx, cy, r, color) => { g.fillStyle = color; g.beginPath(); g.arc(x + cx * s, y + cy * s, r * s, 0, Math.PI * 2); g.fill(); };
+    circle(32, 42, 15, CREAM); circle(68, 42, 15, CREAM);
+    circle(37.5, 47, 6.5, TILE); circle(62.5, 36, 6.5, TILE);
+    g.strokeStyle = AMBER; g.lineWidth = mouth * s; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(x + 31 * s, y + 72 * s); g.lineTo(x + 69 * s, y + 72 * s); g.stroke();
+  }
+
+  // "idiotbox" in Poppins Bold with 6's tracking (-2 px at 52 px), its baseline at (x, y), `px` the font size. Each
+  // letter where the browser sets it, measured in 1000ths of the font size; the o's filled and given the face's eyes.
+  function wordmark(g, x, y, px) {
+    const u = px / 1000;
+    const letters = [['i', 0], ['d', 256.5], ['i', 897.1], ['o', 1153.6], ['t', 1752.2], ['b', 2119.7], ['o', 2760.2], ['x', 3358.8]];
+    g.fillStyle = CREAM; g.font = `700 ${px}px Poppins`; g.textBaseline = 'alphabetic';
+    for (const [ch, at] of letters) g.fillText(ch, x + at * u, y);
+    const eye = (cx, px_, py_) => {
+      g.fillStyle = CREAM; g.beginPath(); g.ellipse(x + cx * u, y - 279.5 * u, 203 * u, 213 * u, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = TILE; g.beginPath(); g.arc(x + px_ * u, y + py_ * u, 124.8 * u, 0, Math.PI * 2); g.fill();
+    };
+    eye(1471.1, 1576.7, -183.5);
+    eye(3077.7, 2972.1, -394.7);
+    g.fillStyle = AMBER;
+    const mx = x + 2014.4 * u, my = y + 150 * u, mw = 520 * u, mh = 80 * u;
+    g.beginPath(); g.roundRect(mx, my, mw, mh, mh / 2); g.fill();
+  }
+
+  document.fonts.load('700 52px Poppins').then(() => {
+    // Icon: the face on the dark tile, rounded like the other TV icons (transparent corners).
+    const ic = document.getElementById('icon').getContext('2d');
+    ic.fillStyle = TILE; ic.beginPath(); ic.roundRect(0, 0, 192, 192, 44); ic.fill();
+    face(ic, 192 * 0.15, 192 * 0.15, 192 * 0.7, 10);
+
+    // Banner: the wordmark alone, centered, with faint googly eyes scattered around it (the face is the icon's).
+    const bn = document.getElementById('banner').getContext('2d');
+    bn.fillStyle = TILE; bn.fillRect(0, 0, 640, 360);
+    // A pair at (x, y), eyes of radius r, each pupil looking its own way (degrees), the whites at `alpha`. Kept
+    // clear of the wordmark (about 120–520 across, 125–235 down).
+    const googly = (x, y, r, a1, a2, alpha) => {
+      for (const [ex, a] of [[x - 1.15 * r, a1], [x + 1.15 * r, a2]]) {
+        bn.fillStyle = `rgba(244, 244, 246, ${alpha})`; bn.beginPath(); bn.arc(ex, y, r, 0, Math.PI * 2); bn.fill();
+        const t = a * Math.PI / 180;
+        bn.fillStyle = '#0B0B0E'; bn.beginPath(); bn.arc(ex + Math.cos(t) * r * 0.42, y + Math.sin(t) * r * 0.42, r * 0.48, 0, Math.PI * 2); bn.fill();
+      }
+    };
+    // Never both the same way: cross-eyed (0, 180), wall-eyed (180, 0), one up one down, opposite diagonals.
+    [[62, 58, 13, 0, 180, 0.16], [205, 52, 9, 270, 90, 0.12], [372, 70, 11, 225, 45, 0.14], [560, 52, 16, 180, 0, 0.18],
+     [600, 165, 9, 90, 300, 0.12], [50, 175, 10, 315, 135, 0.12], [90, 300, 17, 30, 200, 0.18], [262, 300, 10, 180, 270, 0.13],
+     [430, 305, 14, 135, 330, 0.16], [585, 300, 11, 0, 180, 0.14]].forEach((p) => googly(...p));
+    // The wordmark's box (820 above the baseline to 240 below, with the mouth) centered on the banner.
+    const px = 100, wordWidth = 3979 * px / 1000;
+    wordmark(bn, (640 - wordWidth) / 2, 180 - (1060 / 2 - 820) * px / 1000, px);
+
+    for (const id of ['icon', 'banner']) document.getElementById(id + '-link').href = document.getElementById(id).toDataURL('image/png');
+    window.art = {};
+    for (const id of ['icon', 'banner']) window.art[id] = document.getElementById(id).toDataURL('image/png');
+  });
+</script>
+</body>
+</html>

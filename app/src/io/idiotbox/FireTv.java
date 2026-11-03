@@ -7,8 +7,9 @@ import android.os.Build;
 import android.os.SystemClock;
 
 /**
- * Amazon Fire TV (Fire OS 7, Android 9; tested on a Fire TV Stick 3rd gen, AFTSSS). Fire OS protects its launcher
- * (pm disable-user refuses it) and ignores set-home-activity, so our home screen can't be the HOME activity there.
+ * Amazon Fire TV (Fire OS 7 and 8, Android 9 and 11; tested on a Fire TV Stick 3rd gen, AFTSSS). Fire OS protects
+ * its launcher (pm disable-user refuses it) and ignores set-home-activity, so our home screen can't be the HOME
+ * activity there.
  * Instead FireTvService opens it whenever Amazon's home screen comes to the front, and LiveTvActivity turns the
  * remote's Live TV button into a straight way home.
  */
@@ -19,7 +20,7 @@ final class FireTv {
     static final boolean IS = "Amazon".equalsIgnoreCase(Build.MANUFACTURER) && Build.MODEL.startsWith("AFT");
 
     static final String LAUNCHER = "com.amazon.tv.launcher";
-    /** The Alexa assistant: Fire OS turns it back on at every boot, before our boot check can turn it off. */
+    /** The Alexa assistant: Fire OS turns it back on at every boot, so FireTvService closes its overlay. */
     static final String ALEXA = "com.amazon.vizzini";
 
     private static final long DEBOUNCE_MS = 1500;

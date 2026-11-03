@@ -1,5 +1,6 @@
 package io.idiotbox;
 
+import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.Context;
 import android.graphics.Rect;
 import android.os.Bundle;
@@ -44,6 +45,8 @@ final class Spoken extends AccessibilityNodeProvider {
 
     /** TalkBack's click and the remote's OK can both arrive for one press: only the first counts. */
     private static final long SAME_PRESS_MS = 600;
+    /** How long "a screen reader is on" is trusted (asking is a binder call; it can be turned on without leaving). */
+    private static final long READER_MS = 2000;
 
     private final View host;
     private final Source source;
@@ -55,7 +58,8 @@ final class Spoken extends AccessibilityNodeProvider {
     private int lastFocused = -1, accessibilityFocused = -1;
     private String lastText = "";
     private boolean following;
-    private long keyAt, talkBackAt;
+    private long keyAt, talkBackAt, readerAt;
+    private boolean reader;
 
     Spoken(View host, Source source) {
         this.host = host;
@@ -63,9 +67,23 @@ final class Spoken extends AccessibilityNodeProvider {
         manager = (AccessibilityManager) host.getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
     }
 
+    /**
+     * Is a screen reader (TalkBack, VoiceView) on? Not just isEnabled(): FireTvService is an accessibility service too,
+     * so that's always true in Idiot Box mode.
+     */
+    private boolean reader() {
+        long now = SystemClock.uptimeMillis();
+        if (readerAt == 0 || now - readerAt > READER_MS) {
+            readerAt = now;
+            reader = manager.isEnabled()
+                    && !manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_SPOKEN).isEmpty();
+        }
+        return reader;
+    }
+
     /** After every focus move (or change on screen): TalkBack reads the focused item if it changed. */
     void focusMoved() {
-        if (!manager.isEnabled()) return;
+        if (!reader()) return;
         send(HOST_VIEW_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
         // Again once the slide is over: the items have moved to where they rest.
         host.removeCallbacks(settled);
@@ -81,6 +99,7 @@ final class Spoken extends AccessibilityNodeProvider {
     /** The screen came back: read the focused item again once the window has focus. */
     void readAgain() {
         lastFocused = -1;
+        readerAt = 0;
         host.postDelayed(this::focusMoved, 400);
     }
 

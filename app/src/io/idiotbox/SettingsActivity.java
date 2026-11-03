@@ -7,35 +7,33 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
-import android.view.Choreographer;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.accessibility.AccessibilityNodeProvider;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Idiot Box's settings (the app's icon, "All Apps", or the gear on the home screen), as a sidebar like Google TV's:
- * a translucent window whose glass panel slides in from the right over the dimmed home screen, the focused row solid
- * white as on the home screen. Every page opens in the same panel; Back on the first one slides it out. "Home screen"
- * opens the Idiot Box / Original choice (with a check on the current one); the switch runs in the main process
- * (HomeMode) and this screen only asks for it and follows the state file.
+ * a translucent window whose sidebar slides in from the right on black that fades out to the left, over the home
+ * screen; its rows are pills, the focused one solid white as on the home screen. Every page opens in the same panel;
+ * Back (or ←) on the first one slides it out. "Home screen" opens the Idiot Box / Original choice (with a check on the
+ * current one); the switch runs in the main process (HomeMode) and this screen only asks for it and follows the state
+ * file.
  */
 public class SettingsActivity extends Activity {
     private SettingsView view;
@@ -112,16 +110,17 @@ public class SettingsActivity extends Activity {
         view.resume();
     }
 
-    static final class SettingsView extends View implements Choreographer.FrameCallback {
+    static final class SettingsView extends View {
         private static final int MAIN = 0, HOME_CHOICE = 1, HOME_SETTINGS = 2, PICKER = 3, SHELF_EDIT = 4, PHONE = 5;
-        // The panel floats 48 px in from the right, top and bottom; the rows run almost edge to edge in it, the text
-        // PAD in from its sides.
-        private static final float PANEL_W = 680, PANEL_INSET = 48, PANEL_RADIUS = 36, PAD = 36;
-        private static final float ROWS_TOP = 168, ROW_H = 76, ROW_GAP = 8, SECTION = 50, BREAK = 20, ROW_RADIUS = 20;
+        // The sidebar: PANEL_W wide, SIDE from the right edge, its text TOP from the top and bottom (and PAD in).
+        private static final float PANEL_W = 680, SIDE = 48, TOP = 16, PAD = 36, FADE = 560;
+        private static final float ROWS_TOP = 140, ROW_H = 74, ROW_GAP = 10, SECTION = 44, BREAK = 18;
         private static final int PICK_VISIBLE = 8;
-        private static final int AMBER = 0xFFFFC266, WHITE = 0xFFF4F4F6, INK = 0xFF0A0B0F;
-        private static final String[] MAIN_SYMBOLS = {"home", "bedtime", "settings", "apps", "tv_settings"};
-        private static final String[] SETTING_SYMBOLS = {"settings", "speaker", "sparkles", "sunny", "live_tv", "tv", "sync"};
+        private static final int WHITE = 0xFFF4F4F6, INK = 0xFF0A0B0F;
+        private static final String[] MAIN_SYMBOLS = {"home", "bedtime", "settings", "apps", "live_tv", "tv_settings"};
+        private static final String[] SETTING_SYMBOLS = {"settings", "speaker", "sparkles", "sunny", "live_tv", "tv", "play", "sync"};
+        /** The mode and the picks' state, read from their files off the main thread. */
+        private static final ExecutorService io = Executors.newSingleThreadExecutor();
 
         private final SettingsActivity activity;
         private final Handler handler = new Handler(Looper.getMainLooper());
@@ -132,11 +131,15 @@ public class SettingsActivity extends Activity {
         // The list picker (the language, or the place when the city typed matched several): what it shows, which one
         // is in use, where we are.
         private final List<String> pickLabels = new ArrayList<>();
-        // The shelf editor: what it can hold (selected ones first, in order) and the selection.
+        // The shelf editor, also the tabs' (editingTabs): what it can hold (selected ones first, in order) and the
+        // selection, by key (an app's package, a tab's number).
         private final List<String[]> shelfRows = new ArrayList<>();
         private final List<String> shelfOrder = new ArrayList<>();
+        private boolean editingTabs;
         private int pickFor, pickCurrent, pickScroll;
-        private static final int PICK_LANGUAGE = -1, PICK_CITY = -2;
+        private static final int PICK_LANGUAGE = -1, PICK_CITY = -2, PICK_MUSIC = -3;
+        // Home Settings → Music provider: the apps that share their music, as {package, name}, once found (null before).
+        private List<String[]> providers;
         // Home Settings → Location: the places found for what was typed (when more than one), or why none was.
         private final List<String[]> cities = new ArrayList<>();
         private String locationNote = "";
@@ -144,29 +147,47 @@ public class SettingsActivity extends Activity {
         private String phoneUrl;
         private android.graphics.Bitmap phoneQr;
         private final Paint qrPaint = new Paint();
-        private final RectF tmp = new RectF(), rowRect = new RectF(), panelRect = new RectF(), focusBox = new RectF();
+        private final RectF tmp = new RectF(), rowRect = new RectF(), focusBox = new RectF();
         private JSONObject state = new JSONObject(), recs = new JSONObject();
         private boolean hasKey;
         private int screen = MAIN, focus;
         private boolean running, okDown, backDown;
-        // Wrapped text, made again only when it changes: the last error, the hint at the bottom, the TMDB credit.
-        private Wrap errorWrap = new Wrap(), hintWrap = new Wrap(), creditWrap = new Wrap(), leadWrap = new Wrap();
+        private int polls;   // a poll answered after a pause and a resume is the old one's: dropped
+        // Row text, made again only when the language (or, for the values, a setting) changes.
+        private String[] mainLabels, labels, values;
+        private int labelsGeneration = -1, valuesGeneration = -1, valuesVersion = -1;
+        private String valuesNote;
+        // Wrapped text, made again only when it changes: the hint under the rows, the TMDB credit, the phone page's lead.
+        private Wrap hintWrap = new Wrap(), creditWrap = new Wrap(), leadWrap = new Wrap();
         private final String versionText;
+        // The "idiotbox" wordmark, the first page's heading: a vector (res/drawable/wordmark.xml, from
+        // tools/wordmark.html), 4000 × 1060 in 1000ths of its font size, the baseline 820 down.
+        private final android.graphics.drawable.Drawable wordmark;
         private final Spoken spoken;
         private long lastNanos;
         private int w, h;
         private float k = 1;
-        private Paint title, crumb, section, rowLabel, rowValue, header, link, white, shadow, panelFill, panelEdge, pillFill, scrim;
-        private TextPaint notice, hint, small, warnText, lead, rowFit;
+        private Paint title, crumb, section, rowLabel, rowValue, link, white, shadow, fade, panelEdge, pillFill;
+        private TextPaint hint, small, lead, rowFit;
 
         private final Runnable poll = new Runnable() {
             @Override public void run() {
                 if (!running) return;
-                state = HomeMode.state(getContext());
-                hasKey = Recs.hasKey(getContext());
-                recs = Recs.status(getContext());
-                invalidate();
-                handler.postDelayed(this, 2000);
+                Context c = getContext();
+                int asked = polls;
+                io.execute(() -> {
+                    JSONObject s = HomeMode.state(c), r = Recs.status(c);
+                    boolean key = Recs.hasKey(c);
+                    handler.post(() -> {
+                        if (!running || asked != polls) return;
+                        boolean changed = key != hasKey || !s.toString().equals(state.toString()) || !r.toString().equals(recs.toString());
+                        state = s;
+                        hasKey = key;
+                        recs = r;
+                        if (changed) invalidate();
+                        handler.postDelayed(poll, 2000);
+                    });
+                });
             }
         };
 
@@ -176,6 +197,7 @@ public class SettingsActivity extends Activity {
             for (int i = 0; i < pop.length; i++) pop[i] = new Spring(0.28f, 0.85f, 0);
             slide.target = 1;
             versionText = versionName(a);
+            wordmark = a.getDrawable(R.drawable.wordmark);
             setFocusable(true);
             setContentDescription("Idiot Box");
             // TalkBack: one item per row, id = row + 1.
@@ -205,7 +227,7 @@ public class SettingsActivity extends Activity {
             switch (screen) {
                 case MAIN: {
                     if (row == 0) return Ui.trf("Home Screen, {mode}", "mode", freeActive() ? "Idiot Box" : Ui.tr("Original"));
-                    String[] names = {Ui.tr("Screensaver, preview"), Ui.tr("Home Settings"), Ui.tr("Shelf"), Ui.tr("TV Settings")};
+                    String[] names = {Ui.tr("Screensaver, preview"), Ui.tr("Home Settings"), Ui.tr("Shelf"), Ui.tr("Tabs"), Ui.tr("TV Settings")};
                     return row - 1 < names.length ? names[row - 1] : "";
                 }
                 case HOME_CHOICE: {
@@ -229,6 +251,7 @@ public class SettingsActivity extends Activity {
                     if (at >= shelfRows.size()) return "";
                     String[] app = shelfRows.get(at);
                     int place = shelfOrder.indexOf(app[0]);
+                    if (editingTabs) return app[1] + ", " + (place >= 0 ? "#" + (place + 1) : Ui.tr("shelf|Off"));
                     return app[1] + ", " + (place >= 0 ? Ui.trf("on the shelf, place {n}", "n", place + 1)
                             : Ui.tr("not on the shelf"));
                 }
@@ -238,7 +261,7 @@ public class SettingsActivity extends Activity {
         }
 
         private float panelLeft() {
-            return 1920 - PANEL_INSET - PANEL_W;
+            return 1920 - SIDE - PANEL_W;
         }
 
         private RectF rowBox(int row) {
@@ -249,14 +272,14 @@ public class SettingsActivity extends Activity {
 
         /** The heading over `row` when it starts a section, "" when only a gap sets it apart, null inside a section. */
         private String sectionAt(int row) {
-            if (screen == MAIN) return row == 4 ? "" : null;
-            if (screen == HOME_SETTINGS) return row == 2 ? Ui.tr("Picks and weather") : row == 4 ? Ui.tr("Live TV") : row == 6 ? "" : null;
+            if (screen == MAIN) return row == 5 ? "" : null;
+            if (screen == HOME_SETTINGS) return row == 2 ? Ui.tr("Picks and weather") : row == 4 ? Ui.tr("Live TV") : row == 6 ? Ui.tr("Music") : row == 7 ? "" : null;
             return null;
         }
 
         /** Top of `row`, in the 1920 × 1080 space. */
         private float rowTop(int row) {
-            float top = PANEL_INSET + ROWS_TOP + row * (ROW_H + ROW_GAP);
+            float top = TOP + ROWS_TOP + row * (ROW_H + ROW_GAP);
             for (int i = 1; i <= row; i++) {
                 String s = sectionAt(i);
                 if (s != null) top += s.isEmpty() ? BREAK : SECTION;
@@ -268,30 +291,18 @@ public class SettingsActivity extends Activity {
             if (running) return;
             running = true;
             lastNanos = 0;
+            polls++;
             handler.post(poll);
-            Choreographer.getInstance().postFrameCallback(this);
+            invalidate();
             spoken.readAgain();
             if (screen == PHONE) openPhone();   // the page stopped while away
         }
 
         void pause() {
             running = false;
+            polls++;
             PhoneSetup.stop();
             handler.removeCallbacks(poll);
-            Choreographer.getInstance().removeFrameCallback(this);
-        }
-
-        @Override public void doFrame(long frameTimeNanos) {
-            if (!running) return;
-            if (closing && slide.value < 0.02f) {
-                running = false;
-                activity.finish();
-                return;
-            }
-            boolean moving = !slide.settled();
-            for (Spring s : pop) moving |= !s.settled();
-            if (moving) invalidate();
-            Choreographer.getInstance().postFrameCallback(this);
         }
 
         @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
@@ -304,10 +315,6 @@ public class SettingsActivity extends Activity {
             rowLabel = Ui.text(Ui.medium, 28 * k, 0xF2FFFFFF);
             rowFit = new TextPaint(rowLabel);
             rowValue = Ui.text(Ui.regular, 22 * k, 0x8CFFFFFF);
-            header = Ui.text(Ui.semibold, 20 * k, 0x73FFFFFF);
-            header.setLetterSpacing(0.06f);
-            warnText = new TextPaint(Ui.text(Ui.regular, 22 * k, AMBER));
-            notice = new TextPaint(Ui.text(Ui.regular, 22 * k, 0xB3FFFFFF));
             hint = new TextPaint(Ui.text(Ui.regular, 22 * k, 0x8CFFFFFF));
             small = new TextPaint(Ui.text(Ui.regular, 19 * k, 0x66FFFFFF));
             lead = new TextPaint(Ui.text(Ui.medium, 27 * k, 0xE6FFFFFF));
@@ -316,18 +323,17 @@ public class SettingsActivity extends Activity {
             white.setColor(WHITE);
             shadow = new Paint(Paint.ANTI_ALIAS_FLAG);
             shadow.setMaskFilter(new BlurMaskFilter(22 * k, BlurMaskFilter.Blur.NORMAL));
-            scrim = new Paint();
-            // The home screen's smoked glass, near opaque (nothing blurred behind it here), lit a little at the top.
-            panelFill = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
-            panelFill.setShader(new LinearGradient(0, PANEL_INSET * k, 0, (1080 - PANEL_INSET) * k,
-                    0xF5232328, 0xF50E0E11, Shader.TileMode.CLAMP));
+            // Black behind the sidebar, fading out to the left over FADE px (no box): the home screen shows through.
+            float fadeEnd = (panelLeft() - 24) * k;
+            fade = new Paint(Paint.DITHER_FLAG);
+            fade.setShader(new android.graphics.LinearGradient(fadeEnd - FADE * k, 0, fadeEnd, 0,
+                    new int[] {0x00000000, 0xA6000000, 0xF2000000}, new float[] {0, 0.55f, 1}, android.graphics.Shader.TileMode.CLAMP));
             panelEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
             panelEdge.setStyle(Paint.Style.STROKE);
             panelEdge.setStrokeWidth(Math.max(1, k));
             panelEdge.setColor(0x24FFFFFF);
             pillFill = new Paint(Paint.ANTI_ALIAS_FLAG);
             pillFill.setColor(0x1AFFFFFF);
-            errorWrap = new Wrap();
             hintWrap = new Wrap();
             creditWrap = new Wrap();
             leadWrap = new Wrap();
@@ -339,7 +345,7 @@ public class SettingsActivity extends Activity {
 
         private int rowCount() {
             switch (screen) {
-                case MAIN: return 5;
+                case MAIN: return 6;
                 case HOME_CHOICE: return 2;
                 case HOME_SETTINGS: return settingLabels().length;
                 case PICKER: return Math.min(PICK_VISIBLE, pickLabels.size());
@@ -353,22 +359,28 @@ public class SettingsActivity extends Activity {
             long now = System.nanoTime();
             float dt = lastNanos == 0 ? 1 / 60f : Math.min(0.05f, (now - lastNanos) / 1e9f);
             lastNanos = now;
+            int rows = rowCount();
+            boolean moving = false;
             for (int i = 0; i < pop.length; i++) {
-                pop[i].target = i == focus && i < rowCount() ? 1 : 0;
+                pop[i].target = i == focus && i < rows ? 1 : 0;
                 pop[i].step(dt);
+                moving |= !pop[i].settled();
             }
             slide.step(dt);
-            float in = Ui.clamp(slide.value);
-            // The home screen stays behind, dimmed.
-            scrim.setColor(Ui.alpha(0xFF000000, 0.55f * in));
-            c.drawRect(0, 0, w, h, scrim);
+            moving |= !slide.settled();
+            if (closing && slide.value < 0.02f) {   // slid out: the activity closes
+                if (running) {
+                    running = false;
+                    post(activity::finish);
+                }
+            } else if (moving && running) {
+                postInvalidateOnAnimation();
+            }
             c.save();
-            c.translate((1 - slide.value) * (PANEL_W + PANEL_INSET + 40) * k, 0);
-            float left = panelLeft() * k;
-            panelRect.set(left, PANEL_INSET * k, left + PANEL_W * k, (1080 - PANEL_INSET) * k);
-            float r = PANEL_RADIUS * k;
-            c.drawRoundRect(panelRect, r, r, panelFill);
-            c.drawRoundRect(panelRect, r, r, panelEdge);
+            c.translate((1 - slide.value) * (PANEL_W + SIDE + 40) * k, 0);
+            // The black comes in with the sidebar (and the fade with it), the home screen still there on the left.
+            fade.setAlpha(Math.round(255 * Ui.clamp(slide.value)));
+            c.drawRect((panelLeft() - 24 - FADE) * k, 0, w + (PANEL_W + SIDE + 40) * k, h, fade);
             drawHeader(c);
             if (screen == MAIN) drawMain(c);
             else if (screen == HOME_CHOICE) drawChoice(c);
@@ -382,22 +394,35 @@ public class SettingsActivity extends Activity {
         /** At the top of the panel: where you are (small) over the page's name. */
         private void drawHeader(Canvas c) {
             String name, from;
-            if (screen == MAIN) {
+            if (screen == MAIN && wordmark != null) {
+                drawWordmark(c);
+                return;
+            } else if (screen == MAIN) {
                 name = Ui.tr("Settings");
                 from = versionText;
             } else if (screen == PICKER) {
-                name = pickFor == PICK_LANGUAGE ? Ui.tr("Language") : Ui.tr("Location");
+                name = pickFor == PICK_LANGUAGE ? Ui.tr("Language") : pickFor == PICK_MUSIC ? Ui.tr("Music provider") : Ui.tr("Location");
                 from = Ui.tr("Home Settings");
             } else if (screen == PHONE) {
                 name = Ui.tr("Set up from your phone");
                 from = Ui.tr("Home Settings");
             } else {
-                name = screen == HOME_CHOICE ? Ui.tr("Home Screen") : screen == HOME_SETTINGS ? Ui.tr("Home Settings") : Ui.tr("Shelf");
+                name = screen == HOME_CHOICE ? Ui.tr("Home Screen") : screen == HOME_SETTINGS ? Ui.tr("Home Settings") : editingTabs ? Ui.tr("Tabs") : Ui.tr("Shelf");
                 from = Ui.tr("Settings");
             }
             float x = (panelLeft() + PAD) * k, room = (PANEL_W - 2 * PAD) * k;
-            c.drawText(fit(from, crumb, room), x, (PANEL_INSET + 64) * k, crumb);
-            c.drawText(fit(name, title, room), x - Ui.leftBearing(title, name), (PANEL_INSET + 124) * k, title);
+            c.drawText(fit(from, crumb, room), x, (TOP + 40) * k, crumb);
+            c.drawText(fit(name, title, room), x - Ui.leftBearing(title, name), (TOP + 100) * k, title);
+        }
+
+        /** The first page's heading: the wordmark where a page's name goes, the version beside it. */
+        private void drawWordmark(Canvas c) {
+            float x = (panelLeft() + PAD) * k, baseline = (TOP + 100) * k;
+            // Its letters about the size of a page's name (46 px): drawn at 56 px of Poppins, 1000ths of that per unit.
+            float u = 56 * k / 1000, top = baseline - 820 * u;
+            wordmark.setBounds(Math.round(x), Math.round(top), Math.round(x + 4000 * u), Math.round(top + 1060 * u));
+            wordmark.draw(c);
+            c.drawText(versionText, x + 4000 * u + 14 * k, baseline, crumb);
         }
 
         /** The text area under the rows: from `top` to the panel's bottom padding. */
@@ -411,8 +436,10 @@ public class SettingsActivity extends Activity {
 
         /** The hint under the rows (what OK does), wrapped. */
         private void drawHint(Canvas c, float top, String text) {
-            if (text.isEmpty()) return;
-            StaticLayout l = hintWrap.get(text, hint, Math.round(textRoom()), 6, Layout.Alignment.ALIGN_NORMAL);
+            // As many lines as fit above the panel's bottom padding (Home Settings leaves room for one or two).
+            int lines = (int) (((1080 - TOP) * k - top) / hint.getFontSpacing());
+            if (text.isEmpty() || lines < 1) return;
+            StaticLayout l = hintWrap.get(text, hint, Math.round(textRoom()), Math.min(6, lines));
             c.save();
             c.translate(textLeft(), top);
             l.draw(c);
@@ -421,7 +448,7 @@ public class SettingsActivity extends Activity {
 
         /** Below the last of `rows` rows, with room for the hint. */
         private float belowRows(int rows) {
-            return (rows == 0 ? PANEL_INSET + ROWS_TOP : rowTop(rows - 1) + ROW_H) * k + 36 * k;
+            return (rows == 0 ? TOP + ROWS_TOP : rowTop(rows - 1) + ROW_H) * k + 36 * k;
         }
 
         /** `s`, cut with an ellipsis if it's wider than `room`. */
@@ -431,12 +458,24 @@ public class SettingsActivity extends Activity {
             return TextUtils.ellipsize(s, rowFit, Math.max(0, room), TextUtils.TruncateAt.END).toString();
         }
 
-        /** Row `i` at rowBox(i), in rowRect: nothing behind it at rest; focused, solid white, a little bigger and lifted. */
+        /**
+         * Row `i` at rowBox(i), in rowRect: a pill, like the home screen's tabs and chips. At rest a faint glass pill with a
+         * hairline; focused, solid white, a little bigger and lifted. Returns how focused it is.
+         */
         private float drawRowBackground(Canvas c, int i) {
             rowRect.set(rowBox(i));
-            float f = Ui.clamp(pop[i].value), r = ROW_RADIUS * k;
+            float f = Ui.clamp(pop[i].value);
+            if (f < 0.99f) {
+                float r = rowRect.height() / 2;
+                pillFill.setColor(Ui.alpha(0x14FFFFFF, 1 - f));
+                c.drawRoundRect(rowRect, r, r, pillFill);
+                panelEdge.setAlpha(Math.round(0x24 * (1 - f)));
+                c.drawRoundRect(rowRect, r, r, panelEdge);
+                panelEdge.setAlpha(0x24);
+            }
             if (f > 0.01f) {
                 rowRect.inset(-6 * k * f, -3 * k * f);
+                float r = rowRect.height() / 2;
                 tmp.set(rowRect);
                 tmp.offset(0, 8 * k * f);
                 shadow.setColor(Ui.alpha(0xFF000000, 0.45f * f));
@@ -453,7 +492,7 @@ public class SettingsActivity extends Activity {
          */
         private void drawRowText(Canvas c, float f, String symbol, String label, String value, String mark, boolean dim) {
             float left = rowRect.left + 22 * k, right = rowRect.right - 22 * k, cy = rowRect.centerY();
-            int ink = blend(dim ? 0x80FFFFFF : 0xF2FFFFFF, dim ? 0x990A0B0F : INK, f);
+            int ink = Ui.blend(dim ? 0x80FFFFFF : 0xF2FFFFFF, dim ? 0x990A0B0F : INK, f);
             if (symbol != null) {
                 Symbols.draw(getContext(), c, symbol, left + 16 * k, cy, 27 * k, ink);
                 left += 56 * k;
@@ -461,7 +500,7 @@ public class SettingsActivity extends Activity {
             if (mark != null) {
                 boolean check = mark.equals("check");
                 float size = (check ? 26 : 22) * k, mw = Symbols.width(getContext(), mark, size);
-                Symbols.draw(getContext(), c, mark, right - mw / 2, cy, size, check ? ink : blend(0x66FFFFFF, 0x990A0B0F, f));
+                Symbols.draw(getContext(), c, mark, right - mw / 2, cy, size, check ? ink : Ui.blend(0x66FFFFFF, 0x990A0B0F, f));
                 right -= mw + 16 * k;
             }
             rowLabel.setColor(ink);
@@ -469,9 +508,9 @@ public class SettingsActivity extends Activity {
                 c.drawText(fit(label, rowLabel, right - left), left, cy + Ui.halfCap(rowLabel), rowLabel);
                 return;
             }
-            c.drawText(fit(label, rowLabel, right - left), left, rowRect.top + 35 * k, rowLabel);
-            rowValue.setColor(blend(dim ? 0x59FFFFFF : 0x8CFFFFFF, 0x990A0B0F, f));
-            c.drawText(fit(value, rowValue, right - left), left, rowRect.top + 62 * k, rowValue);
+            c.drawText(fit(label, rowLabel, right - left), left, rowRect.top + rowRect.height() * 0.46f, rowLabel);
+            rowValue.setColor(Ui.blend(dim ? 0x59FFFFFF : 0x8CFFFFFF, 0x990A0B0F, f));
+            c.drawText(fit(value, rowValue, right - left), left, rowRect.top + rowRect.height() * 0.82f, rowValue);
         }
 
         /** The headings over this page's sections (a section after a plain gap has none). */
@@ -483,26 +522,16 @@ public class SettingsActivity extends Activity {
         }
 
         private void drawMain(Canvas c) {
-            String[] labels = {Ui.tr("Home Screen"), Ui.tr("Screensaver"), Ui.tr("Home Settings"), Ui.tr("Shelf"), Ui.tr("TV Settings")};
+            if (mainLabels == null || labelsGeneration != Ui.generation) settingLabels();
+            String[] labels = mainLabels;
             for (int i = 0; i < labels.length; i++) {
                 float f = drawRowBackground(c, i);
                 drawRowText(c, f, MAIN_SYMBOLS[i], labels[i], i == 0 ? (freeActive() ? "Idiot Box" : Ui.tr("Original")) : "",
                         i == 1 ? null : "chevron_right", false);
             }
 
-            // Under the rows: what went wrong last (if anything), the picks and the notices.
-            float x = textLeft(), room = textRoom(), bottom = (1080 - PANEL_INSET - PAD) * k, y = belowRows(labels.length) + 28 * k;
-            String error = state.optString("error");
-            if (!error.isEmpty()) {
-                StaticLayout l = errorWrap.get(error, warnText, Math.round(room), 3, Layout.Alignment.ALIGN_NORMAL);
-                c.save();
-                c.translate(x, y - l.getLineBaseline(0));
-                l.draw(c);
-                c.restore();
-                y += l.getLineBaseline(l.getLineCount() - 1) - l.getLineBaseline(0) + 56 * k;
-            }
-            y = drawRecs(c, x, room, y);
-            if (y + 80 * k < bottom) drawNotices(c, x, room, y + 44 * k, bottom);
+            // At the bottom: the credit TMDB asks for (its terms want it in the app; the picks come from it).
+            drawCredit(c);
         }
 
         /** How the picks are doing, in one line. */
@@ -510,41 +539,18 @@ public class SettingsActivity extends Activity {
             String error = recs.optString("error");
             int count = recs.optInt("count");
             if (!hasKey) return Ui.tr("No TMDB key: add one in Home Settings.");
-            if (error.equals(Recs.NO_KNOWN_APPS)) return Ui.tr("None of the TV's streaming apps can give picks.");
-            if (error.equals(Recs.NO_APPS)) return Ui.trf("TMDB has none of the TV's apps for tmdb_region={region}.", "region", Recs.REGION);
             if (!error.isEmpty()) return Ui.trf("Error: {error}.", "error", error);
             if (count > 0) return Ui.trf("On · {n} titles from the TV's apps, 3 new ones every hour.", "n", count);
             return Ui.tr("Fetching titles…");
         }
 
-        /** Home screen picks: status, and the credit TMDB asks for. Returns the bottom. */
-        private float drawRecs(Canvas c, float x, float room, float y) {
-            c.drawText(Ui.tr("RECOMMENDATIONS"), x, y, header);
-            c.drawText(fit(recsLine(), notice, room), x, y + 38 * k, notice);
+        private void drawCredit(Canvas c) {
             String credit = Ui.tr("This product uses the TMDB API but is not endorsed or certified by TMDB.");
-            if (!Config.WATCHMODE_KEY.trim().isEmpty()) credit += "\n" + Ui.tr("Links to the titles by Watchmode.");
-            StaticLayout l = creditWrap.get(credit, small, Math.round(room), 4, Layout.Alignment.ALIGN_NORMAL);
+            StaticLayout l = creditWrap.get(credit, small, Math.round(textRoom()), 4);
             c.save();
-            c.translate(x, y + 54 * k);
+            c.translate(textLeft(), (1080 - TOP - 12) * k - l.getHeight());
             l.draw(c);
             c.restore();
-            return y + 54 * k + l.getHeight();
-        }
-
-        private void drawNotices(Canvas c, float x, float room, float y, float bottom) {
-            c.drawText(Ui.tr("NOTICES"), x, y, header);
-            JSONArray notices = state.optJSONArray("notices");
-            int shown = 0;
-            for (int i = 0; notices != null && i < notices.length() && shown < 2; i++) {
-                JSONObject o = notices.optJSONObject(i);
-                if (o == null) continue;
-                float base = y + (38 + 34 * shown) * k;
-                if (base > bottom) break;
-                String line = ago(o.optLong("at")) + " · " + o.optString("text");
-                c.drawText(fit(line, notice, room), x, base, notice);
-                shown++;
-            }
-            if (shown == 0) c.drawText(Ui.tr("None yet."), x, y + 38 * k, notice);
         }
 
         /** Home screen choice: Idiot Box or the original, with a check on the one in use. */
@@ -559,26 +565,12 @@ public class SettingsActivity extends Activity {
             }
         }
 
-        private static int blend(int a, int b, float f) {
-            int aa = a >>> 24, ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
-            int ba = b >>> 24, br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
-            return (Math.round(aa + (ba - aa) * f) << 24) | (Math.round(ar + (br - ar) * f) << 16)
-                    | (Math.round(ag + (bg - ag) * f) << 8) | Math.round(ab + (bb - ab) * f);
-        }
-
-        private static String ago(long at) {
-            long minutes = Math.max(0, (System.currentTimeMillis() - at) / 60_000);
-            if (minutes < 1) return Ui.tr("now");
-            if (minutes < 60) return Ui.trf("{n} min ago", "n", minutes);
-            if (minutes < 48 * 60) return Ui.trf("{n} h ago", "n", minutes / 60);
-            return Ui.plural("plural|one:{n} day ago|other:{n} days ago", minutes / 1440);
-        }
 
         private static String versionName(Context c) {
             try {
-                return "Idiot Box " + c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
+                return c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
             } catch (android.content.pm.PackageManager.NameNotFoundException e) {
-                return "Idiot Box";
+                return "";
             }
         }
 
@@ -599,15 +591,26 @@ public class SettingsActivity extends Activity {
                     spoken.focusMoved();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_LEFT:
-                case KeyEvent.KEYCODE_DPAD_RIGHT:
-                    if (down && screen == SHELF_EDIT) {
-                        moveShelfApp(e.getKeyCode() == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1);
+                case KeyEvent.KEYCODE_DPAD_RIGHT: {
+                    boolean right = e.getKeyCode() == KeyEvent.KEYCODE_DPAD_RIGHT;
+                    if (!down) return true;
+                    if (screen == SHELF_EDIT) {   // the editors: ← → move the focused app or tab
+                        moveShelfApp(right ? 1 : -1);
                         invalidate();
-                    } else if (down && screen == HOME_SETTINGS) {
+                    } else if (e.getRepeatCount() > 0) {
+                        return true;   // held: one step, not one per repeat
+                    } else if (!right) {
+                        back();   // as in a sidebar: ← goes back, and from the first page closes it
+                        invalidate();
+                        spoken.focusMoved();
+                    } else if (opensPage()) {
+                        activate();   // → on a row that opens a page or a list: as OK
+                    } else if (screen == HOME_SETTINGS && focus == 1) {
                         adjust();
                         invalidate();
                     }
                     return true;
+                }
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
                 case KeyEvent.KEYCODE_NUMPAD_ENTER:
@@ -633,6 +636,11 @@ public class SettingsActivity extends Activity {
             }
         }
 
+        /** Does the focused row open a page or a list (the ones with a chevron)? */
+        private boolean opensPage() {
+            return (screen == MAIN || screen == HOME_SETTINGS) && focus != 1;
+        }
+
         /** Back: one page up, and from the first one the panel slides out (then the activity closes, doFrame). */
         private void back() {
             if (screen == MAIN) {
@@ -646,12 +654,15 @@ public class SettingsActivity extends Activity {
             } else if (screen == PICKER && pickFor == PICK_CITY) {
                 focus = 3;
                 screen = HOME_SETTINGS;
-            } else if (screen == PHONE) {
-                PhoneSetup.stop();
+            } else if (screen == PICKER && pickFor == PICK_MUSIC) {
                 focus = 6;
                 screen = HOME_SETTINGS;
+            } else if (screen == PHONE) {
+                PhoneSetup.stop();
+                focus = 7;
+                screen = HOME_SETTINGS;
             } else {
-                focus = screen == HOME_SETTINGS ? 2 : screen == SHELF_EDIT ? 3 : 0;
+                focus = screen == HOME_SETTINGS ? 2 : screen == SHELF_EDIT ? (editingTabs ? 4 : 3) : 0;
                 screen = MAIN;
             }
             for (Spring s : pop) s.snap(0);
@@ -661,15 +672,28 @@ public class SettingsActivity extends Activity {
 
         /**
          * Home Settings: language, sounds, then what config.properties set at first: the TMDB key, the city, Live TV's
-         * playlists and guides. The city is typed here; the rest come from the phone page.
+         * playlists and guides (the city typed here, the rest from the phone page).
          */
         private String[] settingLabels() {
-            return new String[] {Ui.tr("Language"), Ui.tr("Navigation sounds"), Ui.tr("TMDB key"), Ui.tr("Location"),
-                    Ui.tr("Live TV channels"), Ui.tr("TV guide"), Ui.tr("Set up from your phone")};
+            if (labels == null || labelsGeneration != Ui.generation) {
+                labelsGeneration = Ui.generation;
+                labels = new String[] {Ui.tr("Language"), Ui.tr("Navigation sounds"), Ui.tr("TMDB key"), Ui.tr("Location"),
+                        Ui.tr("Live TV channels"), Ui.tr("TV guide"), Ui.tr("Music provider"), Ui.tr("Set up from your phone")};
+                mainLabels = new String[] {Ui.tr("Home Screen"), Ui.tr("Screensaver"), Ui.tr("Home Settings"), Ui.tr("Shelf"),
+                        Ui.tr("Tabs"), Ui.tr("TV Settings")};
+            }
+            return labels;
         }
 
         private String[] settingValues() {
-            String[] v = new String[7];
+            if (values != null && valuesGeneration == Ui.generation && valuesVersion == Prefs.version
+                    && locationNote.equals(valuesNote)) {
+                return values;
+            }
+            valuesGeneration = Ui.generation;
+            valuesVersion = Prefs.version;
+            valuesNote = locationNote;
+            String[] v = values = new String[8];
             String lang = Prefs.language();
             v[0] = lang.equals("auto") ? Ui.tr("Automatic") : Ui.languageName(lang);
             v[1] = Prefs.sounds() ? Ui.tr("On") : Ui.tr("Off");
@@ -678,7 +702,8 @@ public class SettingsActivity extends Activity {
                     : Prefs.city().isEmpty() ? Prefs.latitude() + ", " + Prefs.longitude() : Prefs.city();
             v[4] = Prefs.ownPlaylists() ? Ui.plural("plural|one:{n} playlist|other:{n} playlists", Prefs.playlists().size()) : Ui.tr("Built-in");
             v[5] = Prefs.ownGuides() ? Ui.plural("plural|one:{n} guide|other:{n} guides", Prefs.guides().size()) : Ui.tr("Built-in");
-            v[6] = "";
+            v[6] = MusicEngine.pkg().isEmpty() ? Ui.tr("None") : MusicEngine.name(getContext());
+            v[7] = "";
             return v;
         }
 
@@ -692,9 +717,10 @@ public class SettingsActivity extends Activity {
             String what;
             switch (focus) {
                 case 0: what = Ui.tr("OK opens the list."); break;
-                case 1: what = Ui.tr("OK or the arrows change the value."); break;
+                case 1: what = Ui.tr("OK or → changes it."); break;
                 case 2: what = Ui.tr("OK sets it from your phone.") + "\n" + recsLine(); break;
                 case 3: what = Ui.tr("Your city, for the weather.") + "\n" + Ui.tr("OK opens the keyboard."); break;
+                case 6: what = Ui.tr("The app the Music tab browses and searches."); break;
                 default: what = Ui.tr("OK sets it from your phone.");
             }
             drawHint(c, belowRows(labels.length), what);
@@ -709,7 +735,7 @@ public class SettingsActivity extends Activity {
             return v;
         }
 
-        /** ← → on Navigation sounds turn them on or off (the other rows open something with OK). */
+        /** OK or → on Navigation sounds turns them on or off (the other rows open something). */
         private void adjust() {
             if (focus != 1) return;
             Prefs.setSounds(!Prefs.sounds());
@@ -798,13 +824,13 @@ public class SettingsActivity extends Activity {
 
         /** What to do, the code on a white card, the address in a glass pill, how to stop it. */
         private void drawPhone(Canvas c) {
-            float x = textLeft(), room = textRoom(), top = (PANEL_INSET + ROWS_TOP) * k;
+            float x = textLeft(), room = textRoom(), top = (TOP + ROWS_TOP) * k;
             if (phoneQr == null) {
                 drawHint(c, top, Ui.tr("No network: connect the TV to Wi-Fi first."));
                 return;
             }
             StaticLayout l = leadWrap.get(Ui.tr("On your phone, on the same Wi-Fi, scan the code or open:"), lead,
-                    Math.round(room), 3, Layout.Alignment.ALIGN_NORMAL);
+                    Math.round(room), 3);
             c.save();
             c.translate(x, top);
             l.draw(c);
@@ -823,6 +849,7 @@ public class SettingsActivity extends Activity {
             String url = fit(phoneUrl, link, room - 48 * k);
             float pillTop = cardTop + size + 34 * k, pw = link.measureText(url) + 48 * k;
             tmp.set(cx - pw / 2, pillTop, cx + pw / 2, pillTop + 60 * k);
+            pillFill.setColor(0x1AFFFFFF);   // the rows' pills change it
             c.drawRoundRect(tmp, tmp.height() / 2, tmp.height() / 2, pillFill);
             c.drawRoundRect(tmp, tmp.height() / 2, tmp.height() / 2, panelEdge);
             c.drawText(url, tmp.left + 24 * k, tmp.centerY() + Ui.halfCap(link), link);
@@ -832,12 +859,27 @@ public class SettingsActivity extends Activity {
         // MARK: - Shelf editor
 
         private void openShelfEditor() {
+            editingTabs = false;
             shelfOrder.clear();
             // Only the apps the shelf shows: one that was uninstalled would hold a place (and count toward the limit)
             // without a row to take it off.
             PackageManager pm = getContext().getPackageManager();
             for (String pkg : HomeApps.shelfPackages(getContext())) if (HomeApps.launchIntent(pm, pkg) != null) shelfOrder.add(pkg);
             rebuildShelfRows(HomeApps.shelfCandidates(getContext()));
+            pickScroll = 0;
+            focus = 0;
+            screen = SHELF_EDIT;
+        }
+
+        /** Settings > Tabs: the shelf editor over the four tabs (shown ones first, in order). */
+        private void openTabsEditor() {
+            editingTabs = true;
+            shelfOrder.clear();
+            for (int tab : Prefs.tabs()) shelfOrder.add(String.valueOf(tab));
+            List<String[]> all = new ArrayList<>();
+            String[] names = {Ui.tr("Continue watching"), Ui.tr("Explore"), Ui.tr("Live TV"), Ui.tr("Music")};
+            for (int i = 0; i < names.length; i++) all.add(new String[] {String.valueOf(i), names[i]});
+            rebuildShelfRows(all);
             pickScroll = 0;
             focus = 0;
             screen = SHELF_EDIT;
@@ -864,14 +906,20 @@ public class SettingsActivity extends Activity {
                 focus = i - pickScroll;
                 break;
             }
-            Prefs.setShelf(shelfOrder);
+            if (editingTabs) {
+                List<Integer> tabs = new ArrayList<>();
+                for (String key : shelfOrder) tabs.add(Integer.parseInt(key));
+                Prefs.setTabs(tabs);
+            } else {
+                Prefs.setShelf(shelfOrder);
+            }
         }
 
         /** OK: puts the app on the shelf (at the end) or takes it off. */
         private void toggleShelfApp() {
             String pkg = shelfRows.get(pickScroll + focus)[0];
             if (shelfOrder.contains(pkg)) shelfOrder.remove(pkg);
-            else if (shelfOrder.size() < HomeApps.MAX_SHELF) shelfOrder.add(pkg);
+            else if (editingTabs || shelfOrder.size() < HomeApps.MAX_SHELF) shelfOrder.add(pkg);
             else return;
             refreshShelfRows(pkg);
         }
@@ -895,7 +943,8 @@ public class SettingsActivity extends Activity {
                 float f = drawRowBackground(c, i);
                 drawRowText(c, f, null, app[1], place >= 0 ? "#" + (place + 1) : Ui.tr("shelf|Off"), null, place < 0);
             }
-            drawHint(c, belowRows(rows), Ui.trf("OK adds or removes (up to {n}). ← → change the order.", "n", HomeApps.MAX_SHELF));
+            drawHint(c, belowRows(rows), editingTabs ? Ui.tr("OK shows or hides a tab. ← → change the order.")
+                    : Ui.trf("OK adds or removes (up to {n}). ← → change the order.", "n", HomeApps.MAX_SHELF));
         }
 
         private void openLanguagePicker() {
@@ -911,7 +960,41 @@ public class SettingsActivity extends Activity {
             screen = PICKER;
         }
 
-        /** A long list (the languages, the places): eight rows at a time, the one in use checked. */
+        /**
+         * The music provider: None, then the apps that share their music, found by asking each app with a media browser
+         * (a few seconds: until then, None alone).
+         */
+        private void openMusicPicker() {
+            pickFor = PICK_MUSIC;
+            providers = null;
+            fillMusicPicker();
+            screen = PICKER;
+            focus = pickCurrent;
+            MusicEngine.findProviders(getContext(), found -> {
+                if (screen != PICKER || pickFor != PICK_MUSIC) return;
+                providers = found;
+                fillMusicPicker();
+                focus = Math.min(pickCurrent, rowCount() - 1);   // on the one in use (until now only None was there)
+                invalidate();
+                spoken.focusMoved();
+            });
+        }
+
+        private void fillMusicPicker() {
+            pickLabels.clear();
+            pickLabels.add(Ui.tr("None"));
+            String current = Prefs.musicProvider();
+            pickCurrent = 0;
+            if (providers != null) {
+                for (String[] p : providers) {
+                    if (p[0].equals(current)) pickCurrent = pickLabels.size();
+                    pickLabels.add(p[1]);
+                }
+            }
+            pickScroll = 0;
+        }
+
+        /** A long list (the languages, the places, the music apps): eight rows at a time, the one in use checked. */
         private void drawPicker(Canvas c) {
             int rows = rowCount();
             for (int i = 0; i < rows; i++) {
@@ -919,7 +1002,12 @@ public class SettingsActivity extends Activity {
                 float f = drawRowBackground(c, i);
                 drawRowText(c, f, null, pickLabels.get(at), "", at == pickCurrent ? "check" : null, false);
             }
-            drawHint(c, belowRows(rows), (pickScroll + focus + 1) + " / " + pickLabels.size() + "  ·  " + Ui.tr("OK picks, Back cancels."));
+            String hint = (pickScroll + focus + 1) + " / " + pickLabels.size() + "  ·  " + Ui.tr("OK picks, Back cancels.");
+            if (pickFor == PICK_MUSIC) {
+                hint = (providers == null ? Ui.tr("Looking for music apps…") : Ui.tr("Only apps that share their music are listed."))
+                        + "\n" + hint;
+            }
+            drawHint(c, belowRows(rows), hint);
         }
 
         private void activate() {
@@ -932,6 +1020,15 @@ public class SettingsActivity extends Activity {
             } else if (screen == PICKER && pickFor == PICK_LANGUAGE) {
                 Prefs.setLanguage(languageChoices()[pickScroll + focus]);
                 focus = 0;
+                screen = HOME_SETTINGS;
+            } else if (screen == PICKER && pickFor == PICK_MUSIC) {
+                int at = pickScroll + focus;
+                String pkg = at == 0 || providers == null ? "" : providers.get(at - 1)[0];
+                if (!pkg.equals(Prefs.musicProvider())) {
+                    Prefs.setMusicProvider(pkg);
+                    MusicEngine.providerChanged();
+                }
+                focus = 6;
                 screen = HOME_SETTINGS;
             } else if (screen == PICKER) {
                 setCity(cities.get(pickScroll + focus));
@@ -952,6 +1049,8 @@ public class SettingsActivity extends Activity {
             } else if (screen == HOME_SETTINGS && focus == 3) {
                 askCity();
                 return;
+            } else if (screen == HOME_SETTINGS && focus == 6) {
+                openMusicPicker();
             } else if (screen == HOME_SETTINGS) {
                 openPhone();
             } else if (focus == 0) {
@@ -965,6 +1064,8 @@ public class SettingsActivity extends Activity {
                 focus = 0;
             } else if (focus == 3) {
                 openShelfEditor();
+            } else if (focus == 4) {
+                openTabsEditor();
             } else {
                 // The same settings page the home screen's shortcut opens (on Fire TV, Amazon's own).
                 try {
@@ -984,10 +1085,10 @@ public class SettingsActivity extends Activity {
             private StaticLayout layout;
             private String text = "";
 
-            StaticLayout get(String s, TextPaint p, int width, int maxLines, Layout.Alignment align) {
+            StaticLayout get(String s, TextPaint p, int width, int maxLines) {
                 if (layout == null || !s.equals(text) || layout.getWidth() != width) {
                     text = s;
-                    layout = StaticLayout.Builder.obtain(s, 0, s.length(), p, Math.max(1, width)).setAlignment(align)
+                    layout = StaticLayout.Builder.obtain(s, 0, s.length(), p, Math.max(1, width))
                             .setMaxLines(maxLines).setEllipsize(TextUtils.TruncateAt.END).build();
                 }
                 return layout;

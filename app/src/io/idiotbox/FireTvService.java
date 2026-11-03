@@ -70,8 +70,7 @@ public class FireTvService extends AccessibilityService {
      * (no on-device ADB to turn it off), so Original and the watchdog work through the mode.
      */
     private boolean active() {
-        org.json.JSONObject s = HomeMode.state(this);
-        return HomeMode.FREE.equals(s.optString("mode")) && !s.optBoolean("homeReverted");
+        return HomeMode.freeActive(this);
     }
 
     @Override public void onInterrupt() {}
@@ -100,15 +99,11 @@ public class FireTvService extends AccessibilityService {
 
     /** Black, not focusable, not touchable: keys go on to the screen underneath. Gone when ours is up or after 8 s. */
     private void cover() {
-        View view = new View(this);
-        view.setBackgroundColor(Color.BLACK);
-        cover(view);
-    }
-
-    private void cover(View view) {
         handler.removeCallbacks(uncover);
         handler.postDelayed(uncover, COVER_MS);
         if (cover != null) return;
+        View view = new View(this);
+        view.setBackgroundColor(Color.BLACK);
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,

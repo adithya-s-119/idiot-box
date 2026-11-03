@@ -76,6 +76,33 @@ final class Prefs {
     static String tmdbKey() { return sp().getString("tmdb_key", Config.TMDB_KEY).trim(); }
     static void setTmdbKey(String key) { put("tmdb_key", key.trim()); }
 
+    /**
+     * The home screen's tabs shown, in order: 0 Continue watching, 1 Explore, 2 Live TV, 3 Music (Settings > Tabs).
+     * All four until changed; none when all were taken off.
+     */
+    static int[] tabs() {
+        String v = sp().getString("tabs", null);
+        if (v == null) return new int[] {0, 1, 2, 3};
+        List<Integer> out = new ArrayList<>();
+        for (String s : v.split(",")) {
+            try {
+                int t = Integer.parseInt(s.trim());
+                if (t >= 0 && t <= 3 && !out.contains(t)) out.add(t);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        int[] a = new int[out.size()];
+        for (int i = 0; i < a.length; i++) a[i] = out.get(i);
+        return a;
+    }
+
+    static void setTabs(List<Integer> tabs) {
+        StringBuilder b = new StringBuilder();
+        for (int t : tabs) b.append(b.length() == 0 ? "" : ",").append(t);
+        put("tabs", b.toString());
+    }
+
+
     /** Live TV's M3U playlists: the ones set on the phone page, else the built-in one. */
     static List<String> playlists() { return lines("playlists", LiveSource.PLAYLIST); }
     /** Live TV's XMLTV guides: the ones set on the phone page, else the built-in one. */
@@ -98,11 +125,6 @@ final class Prefs {
     static boolean sounds() { return sp().getBoolean("sounds", true); }
     static void setSounds(boolean on) { put("sounds", on); }
 
-    // MARK: - Widgets
-
-    /** This build: the weather always on, for the city in config.properties (Noida); no setting for it. */
-    static boolean weather() { return true; }
-
     // MARK: - Shelf
 
     /** Packages on the home shelf, in order; null until the user edits it (then the built-in list applies). */
@@ -114,11 +136,9 @@ final class Prefs {
         return out;
     }
 
-    static void setShelf(List<String> packages) {
-        StringBuilder sb = new StringBuilder();
-        for (String p : packages) sb.append(sb.length() == 0 ? "" : ",").append(p);
-        put("shelf", sb.toString());
-    }
+    /** The app the Music tab browses and searches (its package), or "" when none was picked (see MusicEngine.pkg). */
+    static String musicProvider() { return sp().getString("music_provider", "").trim(); }
+    static void setMusicProvider(String pkg) { put("music_provider", pkg); }
 
-    // MARK: - Top buttons
+    static void setShelf(List<String> packages) { put("shelf", String.join(",", packages)); }
 }

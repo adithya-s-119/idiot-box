@@ -4,14 +4,13 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
-import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Rect;
-import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.icu.text.PluralRules;
 import android.os.Build;
+import android.util.LongSparseArray;
 
 import org.json.JSONObject;
 
@@ -33,12 +32,12 @@ import java.util.function.Supplier;
 /**
  * Fonts and text for the home screen, the screensaver and the settings. Font: Inter (variable, assets/fonts, SIL OFL),
  * with the "display" optical size for large text and the "text" size for small text; without it, the system font at a
- * similar weight.
+ * similar weight. Trimmed to Latin, Greek and Cyrillic (other scripts come from the system font): see CLAUDE.md.
  */
 final class Ui {
     private Ui() {}
 
-    /** Android 8 to 11: older TVs and boxes, whose GPUs need the cheaper drawing paths (Shadows, rounded images). */
+    /** Before Android 12: every Fire OS (7 is Android 9, 8 is Android 11), so always true on the TVs this app runs on. */
     static final boolean LEGACY = Build.VERSION.SDK_INT < 31;
     /**
      * The language in use: "en" or one with a catalogue in assets/i18n (pt, es, de, fr, zh-CN…), picked in the settings
@@ -47,27 +46,26 @@ final class Ui {
     static volatile String language = "en";
     /** Bumped when the language changes: text cached by the screens is made again. */
     static volatile int generation;
-    static Typeface thin, light, displayMedium, displaySemibold, regular, medium, semibold;
+    static Typeface light, displayMedium, displaySemibold, regular, medium, semibold;
     private static boolean loaded;
     private static final Rect BOUNDS = new Rect();
-    private static final RectF OVAL = new RectF();
 
     static synchronized void init(Context c) {
         if (loaded) return;
         loaded = true;
         AssetManager a = c.getAssets();
-        thin = font(a, 32, 200);
-        light = font(a, 32, 300);
-        displayMedium = font(a, 32, 500);
-        displaySemibold = font(a, 32, 600);
-        regular = font(a, 14, 400);
-        medium = font(a, 14, 500);
-        semibold = font(a, 14, 600);
+        boolean inter = has(a, FONT);
+        light = font(a, inter, 32, 300);
+        displayMedium = font(a, inter, 32, 500);
+        displaySemibold = font(a, inter, 32, 600);
+        regular = font(a, inter, 14, 400);
+        medium = font(a, inter, 14, 500);
+        semibold = font(a, inter, 14, 600);
     }
 
     /** Inter at an optical size (14 = text, 32 = display) and weight; the system font if the file is missing. */
-    private static Typeface font(AssetManager a, int opticalSize, int weight) {
-        if (has(a, FONT)) {
+    private static Typeface font(AssetManager a, boolean inter, int opticalSize, int weight) {
+        if (inter) {
             try {
                 Typeface t = new Typeface.Builder(a, FONT)
                         .setFontVariationSettings("'opsz' " + opticalSize + ", 'wght' " + weight).build();
@@ -75,19 +73,18 @@ final class Ui {
             } catch (RuntimeException ignored) {
             }
         }
-        // Typeface.create(family, weight, italic) is Android 9+; Android 8 only has regular and bold.
-        if (Build.VERSION.SDK_INT >= 28) return Weighted.create(weight);
-        return Typeface.create(Typeface.DEFAULT, weight >= 600 ? Typeface.BOLD : Typeface.NORMAL);
-    }
-
-    /** Only this class touches the Android 9 call, so Ui itself still verifies on Android 8 (like Recording.Node). */
-    private static final class Weighted {
-        static Typeface create(int weight) {
-            return Typeface.create(Typeface.DEFAULT, weight, false);
-        }
+        return Typeface.create(Typeface.DEFAULT, weight, false);
     }
 
     private static final String FONT = "fonts/InterVariable.ttf";
+
+    private static boolean has(AssetManager a, String path) {
+        try (InputStream in = a.open(path)) {
+            return in != null;
+        } catch (IOException e) {
+            return false;
+        }
+    }
 
     // MARK: - Text in the viewer's language
 
@@ -292,14 +289,6 @@ final class Ui {
         }
     }
 
-    private static boolean has(AssetManager a, String path) {
-        try (InputStream in = a.open(path)) {
-            return in != null;
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
     static Paint text(Typeface face, float size, int color) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
         p.setTypeface(face);
@@ -315,11 +304,20 @@ final class Ui {
         return p;
     }
 
+    /** Cap heights by typeface and size: the screens ask for them several times a frame. */
+    private static final LongSparseArray<Float> CAPS = new LongSparseArray<>();
+
     /** Height of capital letters (and digits) above the baseline. */
     static float cap(Paint p) {
+        long key = (long) System.identityHashCode(p.getTypeface()) << 32 | (Float.floatToIntBits(p.getTextSize()) & 0xFFFFFFFFL);
         synchronized (BOUNDS) {
+            Float cached = CAPS.get(key);
+            if (cached != null) return cached;
             p.getTextBounds("H8", 0, 2, BOUNDS);
-            return -BOUNDS.top;
+            float cap = -BOUNDS.top;
+            if (CAPS.size() >= 256) CAPS.clear();
+            CAPS.put(key, cap);
+            return cap;
         }
     }
 
@@ -344,6 +342,20 @@ final class Ui {
 
     static float clamp(float v) {
         return Math.max(0, Math.min(1, v));
+    }
+
+    /** 0 up to e0, 1 from e1, eased in between (3t² − 2t³). */
+    static float smoothstep(float e0, float e1, float x) {
+        float t = clamp((x - e0) / (e1 - e0));
+        return t * t * (3 - 2 * t);
+    }
+
+    /** From one ARGB color to another, each channel by t. */
+    static int blend(int from, int to, float t) {
+        int aa = from >>> 24, ar = (from >> 16) & 255, ag = (from >> 8) & 255, ab = from & 255;
+        int ba = to >>> 24, br = (to >> 16) & 255, bg = (to >> 8) & 255, bb = to & 255;
+        return (Math.round(aa + (ba - aa) * t) << 24) | (Math.round(ar + (br - ar) * t) << 16)
+                | (Math.round(ag + (bg - ag) * t) << 8) | Math.round(ab + (bb - ab) * t);
     }
 
     static final int[] BAYER = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
@@ -412,36 +424,63 @@ final class Ui {
 
     /** "5:21" (sunrise and sunset; in English, "5:21 AM"). */
     static String time(long at) {
-        return once("time", at, () -> Ui.datePattern("format|h:mm a").format(at));
+        return format("format|h:mm a", at);
     }
 
-    private static final HashMap<String, String> FORMATTED = new HashMap<>();
-
     /**
-     * A formatted value, made once per language: the bottom drawer is redrawn on every frame of its focus animation,
-     * and SimpleDateFormat and String.format there cost ~10 ms a frame on a Mi Box 3.
+     * Formatted values, made once per language (cleared when it changes): screens redraw them on every frame of an
+     * animation, and SimpleDateFormat and String.format there cost ~10 ms a frame on a Mi Box 3. A hit allocates nothing.
      */
-    static String once(String kind, double value, Supplier<String> format) {
-        String key = kind + '|' + language + '|' + value;
+    private static final HashMap<String, LongSparseArray<String>> FORMATTED = new HashMap<>();
+    private static int formattedGeneration = -1;
+
+    /** A "format|..." date pattern applied to `at`, made once. */
+    static String format(String patternKey, long at) {
         synchronized (FORMATTED) {
-            String s = FORMATTED.get(key);
+            LongSparseArray<String> made = formatted(patternKey);
+            String s = made.get(at);
             if (s == null) {
-                if (FORMATTED.size() > 200) FORMATTED.clear();
-                s = format.get();
-                FORMATTED.put(key, s);
+                s = datePattern(patternKey).format(at);
+                keep(made, at, s);
             }
             return s;
         }
     }
 
+    /** A value of one kind, formatted once by `format` (a lambda that captures is still made by the caller). */
+    static String once(String kind, double value, Supplier<String> format) {
+        long key = Double.doubleToLongBits(value);
+        synchronized (FORMATTED) {
+            LongSparseArray<String> made = formatted(kind);
+            String s = made.get(key);
+            if (s == null) {
+                s = format.get();
+                keep(made, key, s);
+            }
+            return s;
+        }
+    }
+
+    private static LongSparseArray<String> formatted(String kind) {
+        if (formattedGeneration != generation) {
+            FORMATTED.clear();
+            formattedGeneration = generation;
+        }
+        LongSparseArray<String> made = FORMATTED.get(kind);
+        if (made == null) {
+            made = new LongSparseArray<>();
+            FORMATTED.put(kind, made);
+        }
+        return made;
+    }
+
+    private static void keep(LongSparseArray<String> made, long key, String s) {
+        if (made.size() >= 200) made.clear();
+        made.put(key, s);
+    }
+
     /** "domingo, 18 de outubro" (lowercase, like the iPhone in Portuguese); "Sunday, October 18" in English; "Sonntag, 18. Oktober". */
     static String date(long now) {
         return Ui.datePattern("format|EEEE, MMMM d").format(now);
-    }
-
-    /** Spinning arc (work in progress). */
-    static void spinner(Canvas c, float cx, float cy, float r, float seconds, Paint stroke) {
-        OVAL.set(cx - r, cy - r, cx + r, cy + r);
-        c.drawArc(OVAL, (seconds * 360f) % 360f, 270f, false, stroke);
     }
 }

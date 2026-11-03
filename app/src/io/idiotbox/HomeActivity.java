@@ -18,22 +18,33 @@ import android.widget.TextView;
  * back to the TV's original one.
  */
 public class HomeActivity extends Activity {
-    /** Brought back by the Music tab's player: stay as it was (not the Home button's fresh start). */
-    static final String EXTRA_KEEP = "keep";
     private HomeView home;
     private int prefsVersion = Prefs.version;   // settings changed while we were away: start over
     // The music screensaver: after MusicSaverActivity.IDLE_MS without a key on the home screen while music plays.
     private final Handler idle = new Handler(Looper.getMainLooper());
     private long lastKey;
+    private boolean idleArmed;
     private final Runnable checkIdle = new Runnable() {
         @Override public void run() {
-            if (Music.playing() && hasWindowFocus() && SystemClock.uptimeMillis() - lastKey >= MusicSaverActivity.IDLE_MS) {
+            idleArmed = false;
+            if (!Music.playing()) return;   // armed again when it plays (watchMusic)
+            long quiet = SystemClock.uptimeMillis() - lastKey;
+            if (hasWindowFocus() && quiet >= MusicSaverActivity.IDLE_MS) {
                 startActivity(new Intent(HomeActivity.this, MusicSaverActivity.class));
             } else {
-                idle.postDelayed(this, 1000);
+                armIdle(Math.max(1000, MusicSaverActivity.IDLE_MS - quiet));
             }
         }
     };
+    private final Music.Listener watchMusic = () -> {
+        if (Music.playing() && !idleArmed) armIdle(1000);
+    };
+
+    private void armIdle(long delay) {
+        idle.removeCallbacks(checkIdle);
+        idle.postDelayed(checkIdle, delay);
+        idleArmed = true;
+    }
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -67,8 +78,10 @@ public class HomeActivity extends Activity {
         if (home != null) home.resume();
         askForTvListings();
         lastKey = SystemClock.uptimeMillis();
-        idle.removeCallbacks(checkIdle);
-        if (home != null) idle.postDelayed(checkIdle, 1000);
+        if (home != null) {
+            Music.addListener(watchMusic);
+            armIdle(1000);
+        }
     }
 
     /** Asked once per start: the picks come from the apps' Watch Next rows (TvPicks); a TMDB key only adds their art. */
@@ -100,15 +113,22 @@ public class HomeActivity extends Activity {
     }
 
     @Override protected void onPause() {
+        Music.removeListener(watchMusic);
         idle.removeCallbacks(checkIdle);
+        idleArmed = false;
         if (home != null) home.pause();
         super.onPause();
+    }
+
+    @Override protected void onStop() {
+        if (home != null) Recs.get(this).trimCovered();
+        super.onStop();
     }
 
     /** Home button pressed on the home screen: back to the entry state (focus on the first app, sheet closed). */
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        if (home != null && !intent.getBooleanExtra(EXTRA_KEEP, false)) home.reset(true);
+        if (home != null) home.reset(true);
     }
 
     @Override protected void onDestroy() {
@@ -118,7 +138,13 @@ public class HomeActivity extends Activity {
 
     @Override public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        if (level >= TRIM_MEMORY_UI_HIDDEN) Recs.get(this).trim();   // hidden: the app in front gets the memory
+        // Shown but the TV is low (a music app's hidden browser can take a third of it): the kept slides go (the one
+        // on screen is the home screen's own), so the music app isn't the one Android kills.
+        if (level >= TRIM_MEMORY_RUNNING_LOW) Recs.get(this).trimSlides();
+        if (level >= TRIM_MEMORY_UI_HIDDEN) {   // hidden: the app in front gets the memory
+            Recs.get(this).trim();
+            MusicArt.trim();
+        }
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {

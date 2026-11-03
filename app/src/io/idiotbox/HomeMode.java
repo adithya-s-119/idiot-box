@@ -33,12 +33,12 @@ final class HomeMode {
 
     /** Asks the main process to switch (the settings screen calls this). */
     static void request(Context c, String mode) {
-        ModeJob.schedule(c, ModeJob.APPLY, mode, 0);
+        ModeJob.schedule(c, ModeJob.APPLY, mode);
     }
 
     /** Our home screen crashed 3 times in 5 minutes: give the home screen back to Amazon's (asked by :home). */
     static void requestRevertHome(Context c) {
-        ModeJob.schedule(c, ModeJob.REVERT, null, 0);
+        ModeJob.schedule(c, ModeJob.REVERT, null);
     }
 
     // MARK: - Switches (main process, from ModeJob)
@@ -46,17 +46,19 @@ final class HomeMode {
     static void applyNow(Context c, String mode) {
         synchronized (RUN) {
             boolean free = FREE.equals(mode);
+            JSONObject s = state(c);
+            String text;
             try {
-                JSONObject s = state(c);
-                s.put("mode", free ? FREE : ORIGINAL).put("since", System.currentTimeMillis()).put("homeReverted", false);
-                save(c, s);
+                s.put("mode", free ? FREE : ORIGINAL).put("homeReverted", false);
                 if (free) Watchdog.clear(c);   // a fresh start: old crashes don't count against it
-                notice(c, free ? Ui.tr("Idiot Box is on. On Fire TV, its service is turned on once from a computer (see the README).")
-                        : Ui.tr("Original mode: Amazon's home screen is back."));
-                done(c, null);
+                text = free ? Ui.tr("Idiot Box is on. On Fire TV, its service is turned on once from a computer (see the README).")
+                        : Ui.tr("Original mode: Amazon's home screen is back.");
             } catch (JSONException e) {
-                done(c, Ui.trf("Couldn't switch: {error}", "error", e.getMessage()));
+                s = state(c);
+                text = Ui.trf("Couldn't switch: {error}", "error", e.getMessage());
             }
+            addNotice(s, text);
+            save(c, s);
         }
     }
 
@@ -66,8 +68,28 @@ final class HomeMode {
             JSONObject s = state(app);
             if (!FREE.equals(s.optString("mode")) || s.optBoolean("homeReverted")) return;
             try { s.put("homeReverted", true); } catch (JSONException ignored) {}
+            addNotice(s, Ui.tr("Idiot Box's home screen crashed 3 times in a row; I switched back to the original one."));
             save(app, s);
-            notice(app, Ui.tr("Idiot Box's home screen crashed 3 times in a row; I switched back to the original one."));
+        }
+    }
+
+    private static long activeStamp = -1;
+    private static boolean active;
+
+    /**
+     * Idiot Box mode, and the watchdog hasn't given Home back (FireTvService asks at every Home press): read again only
+     * when the file changed.
+     */
+    static boolean freeActive(Context c) {
+        File f = new File(c.getFilesDir(), "home-state.json");
+        synchronized (FILE_LOCK) {
+            long stamp = f.lastModified() * 31 + f.length();
+            if (stamp != activeStamp) {
+                JSONObject s = state(c);
+                active = FREE.equals(s.optString("mode")) && !s.optBoolean("homeReverted");
+                activeStamp = stamp;
+            }
+            return active;
         }
     }
 
@@ -112,24 +134,13 @@ final class HomeMode {
                 return;
             }
             if (!tmp.renameTo(new File(dir, "home-state.json"))) AppLog.w("could not replace the state file");
+            activeStamp = -1;   // read again: a write within the file's time resolution keeps its stamp
         }
     }
 
-    private static void done(Context c, String error) {
-        JSONObject s = state(c);
-        s.remove("busy");
-        try { s.put("error", error == null ? "" : error); } catch (JSONException ignored) {}
-        save(c, s);
-        if (error != null) {
-            AppLog.w(error);
-            notice(c, error);
-        }
-    }
-
-    /** A notice for the home screen (a bubble) and the settings screen. Keeps the last 20. */
-    static void notice(Context c, String text) {
+    /** A notice for the home screen (a bubble), first in [s]'s list. Keeps the last 20. */
+    private static void addNotice(JSONObject s, String text) {
         AppLog.w("notice: " + text);
-        JSONObject s = state(c);
         JSONArray old = s.optJSONArray("notices");
         JSONArray list = new JSONArray();
         try {
@@ -137,6 +148,5 @@ final class HomeMode {
             if (old != null) for (int i = 0; i < old.length() && list.length() < 20; i++) list.put(old.get(i));
             s.put("notices", list);
         } catch (JSONException ignored) {}
-        save(c, s);
     }
 }

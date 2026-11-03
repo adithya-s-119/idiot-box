@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Idiot Box wordmark vector</title>
+<!-- Builds app/res/drawable/wordmark.xml, the "idiotbox" wordmark as an Android vector (Settings draws it): Poppins
+     Bold's own letter outlines (read with opentype.js), each letter where the browser sets it with -2 px tracking at
+     52 px, the two o's filled in as the logo's eyes, the amber mouth under the word. Open it in a browser (online, for
+     the font and the library) and save the XML it shows. Units: 1000ths of the font size; the box runs from 820 above
+     the baseline to 240 below. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/opentype.js/1.3.4/opentype.min.js"></script>
+<style>
+  body { margin: 0; padding: 32px; background: #0B0B0E; color: #9a9aa5; font: 14px system-ui, sans-serif; }
+  textarea { width: 100%; height: 300px; background: #17171C; color: #F4F4F6; border: 1px solid #2A2A31; }
+  a { color: #F5C451; }
+</style>
+</head>
+<body>
+<div>Preview:</div>
+<div id="preview" style="margin: 8px 0 24px"></div>
+<div><a id="save" download="wordmark.xml" href="#">save wordmark.xml</a></div>
+<textarea id="xml" readonly></textarea>
+<script>
+  const FONT = 'https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-Bold.ttf';
+  const CREAM = '#F4F4F6', DARK = '#17171C', AMBER = '#F5C451';
+  const TOP = 820, WIDTH = 4000, HEIGHT = 1060;
+  // Where the browser sets each letter of "idiotbox" (Poppins 700, 6's tracking), measured; the o's centers, eyes and
+  // pupils as in the logo (the pupils 6.5/15 of the eye, offset as the face's).
+  const LETTERS = [['i', 0], ['d', 256.5], ['i', 897.1], ['o', 1153.6], ['t', 1752.2], ['b', 2119.7], ['o', 2760.2], ['x', 3358.8]];
+  const EYES = [[1471.1, -279.5], [3077.7, -279.5]], EYE_R = [203, 213];
+  const PUPILS = [[1576.7, -183.5], [2972.1, -394.7]], PUPIL_R = 124.8;
+  const MOUTH = { x: 2014.4, y: 150, w: 520, h: 80 };
+
+  const n = (v) => +v.toFixed(1);
+  const ellipse = (cx, cy, rx, ry) => `M${n(cx - rx)},${n(cy)}a${rx},${ry} 0 1,0 ${2 * rx},0a${rx},${ry} 0 1,0 ${-2 * rx},0Z`;
+  const pill = ({ x, y, w, h }) => { const r = h / 2; return `M${n(x + r)},${n(y)}h${w - h}a${r},${r} 0 0,1 0,${h}h${-(w - h)}a${r},${r} 0 0,1 0,${-h}Z`; };
+
+  fetch(FONT).then((r) => r.arrayBuffer()).then((buf) => {
+    const font = opentype.parse(buf);
+    // Everything moved down by TOP: the vector's viewport starts at 0.
+    let letters = '';
+    for (const [ch, x] of LETTERS) letters += font.getPath(ch, x, TOP, 1000).toPathData(1);
+    const shift = (pts) => pts.map(([x, y]) => [x, y + TOP]);
+    const eyes = shift(EYES).map(([x, y]) => ellipse(x, y, EYE_R[0], EYE_R[1])).join('');
+    const pupils = shift(PUPILS).map(([x, y]) => ellipse(x, y, PUPIL_R, PUPIL_R)).join('');
+    const mouth = pill({ ...MOUTH, y: MOUTH.y + TOP });
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<!-- The "idiotbox" wordmark (tools/wordmark.html builds it): Poppins Bold's outlines, the o's as eyes, the mouth. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="${WIDTH / 20}dp" android:height="${HEIGHT / 20}dp"
+    android:viewportWidth="${WIDTH}" android:viewportHeight="${HEIGHT}">
+    <path android:fillColor="${CREAM}" android:pathData="${letters}" />
+    <path android:fillColor="${CREAM}" android:pathData="${eyes}" />
+    <path android:fillColor="${DARK}" android:pathData="${pupils}" />
+    <path android:fillColor="${AMBER}" android:pathData="${mouth}" />
+</vector>
+`;
+    document.getElementById('xml').value = xml;
+    document.getElementById('save').href = 'data:text/xml;base64,' + btoa(xml);
+    document.getElementById('preview').innerHTML = `<svg width="${WIDTH / 10}" height="${HEIGHT / 10}" viewBox="0 0 ${WIDTH} ${HEIGHT}">
+<path fill="${CREAM}" d="${letters}"/><path fill="${CREAM}" d="${eyes}"/><path fill="${DARK}" d="${pupils}"/><path fill="${AMBER}" d="${mouth}"/></svg>`;
+    window.wordmark = { xml, upem: font.unitsPerEm, letters, eyes, pupils, mouth };
+  }).catch((e) => { document.getElementById('xml').value = 'Failed: ' + e; window.wordmark = { error: String(e) }; });
+</script>
+</body>
+</html>

@@ -1,69 +1,62 @@
 package io.idiotbox;
 
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Paint;
-import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Material Symbols Rounded icons (Apache 2.0), rendered by tools/make_symbols.py as white PNGs in assets/symbols. Drawn
- * like text: `pointSize` is the size of the font next to the icon, and the icon is centered on that font's cap height.
+ * Material Symbols Rounded icons (Apache 2.0) as vectors, res/drawable/sym_<name>.xml (tools/symbols.html builds
+ * them), each cropped to its shape; its dp size is its size in the symbol's 960-unit em. Drawn like text: `pointSize`
+ * is the size of the font next to the icon, and an icon's em is drawn at ~1.2 × `pointSize`.
  */
 final class Symbols {
     private Symbols() {}
 
-    /**
-     * PNG pixels per em of `pointSize` (a 96 pt × 1.5 px/pt reference scale). tools/make_symbols.py renders a 172 px
-     * em, so an icon's em is drawn at ~1.2 × `pointSize`.
-     */
-    private static final float PX_PER_POINT = 96 * 1.5f;
-    private static final Map<String, Bitmap> CACHE = new HashMap<>();
-    private static final Paint PAINT = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-    private static final RectF RECT = new RectF();
+    /** An em's width per point of `pointSize` (as a 172 px em at a 144 px font). */
+    private static final float EM_PER_POINT = 172f / 144;
+    private static final Map<String, Drawable> CACHE = new HashMap<>();
+    private static final Object LOCK = new Object();   // card loading (another thread) also draws symbols
 
-    static Bitmap get(Context c, String name) {
+    private static Drawable get(Context c, String name) {
         synchronized (CACHE) {
             if (CACHE.containsKey(name)) return CACHE.get(name);
-            Bitmap b = null;
-            try (InputStream in = c.getAssets().open("symbols/" + name + ".png")) {
-                b = BitmapFactory.decodeStream(in);
-                if (b != null) {
-                    b = b.extractAlpha();
-                    b.setHasMipMap(true);
-                }
-            } catch (IOException ignored) {
-            }
-            CACHE.put(name, b);
-            return b;
+            int id = c.getResources().getIdentifier("sym_" + name, "drawable", c.getPackageName());
+            Drawable d = id == 0 ? null : c.getDrawable(id).mutate();
+            CACHE.put(name, d);
+            return d;
         }
+    }
+
+    /** The icon's size in pixels at `pointSize`: its intrinsic size is in em units (960 to the em) as dp. */
+    private static float scale(Context c, float pointSize) {
+        return pointSize * EM_PER_POINT / (960 * c.getResources().getDisplayMetrics().density);
     }
 
     static float width(Context c, String name, float pointSize) {
-        Bitmap b = get(c, name);
-        return b == null ? 0 : b.getWidth() * pointSize / PX_PER_POINT;
+        Drawable d = get(c, name);
+        return d == null ? 0 : d.getIntrinsicWidth() * scale(c, pointSize);
     }
 
-    /** Draws centered at (cx, cy) in the given color (lighter, translucent parts of the symbol stay lighter). */
+    /** Draws centered at (cx, cy) in the given color. */
     static void draw(Context c, Canvas canvas, String name, float cx, float cy, float pointSize, int color) {
-        Bitmap b = get(c, name);
-        if (b == null) return;
-        synchronized (PAINT) {   // card loading (another thread) also draws symbols
-            drawLocked(canvas, b, cx, cy, pointSize, color);
+        Drawable d = get(c, name);
+        if (d == null) return;
+        int iw = d.getIntrinsicWidth(), ih = d.getIntrinsicHeight();
+        float u = scale(c, pointSize);
+        synchronized (LOCK) {
+            // At its intrinsic size, scaled by the canvas: placed to the subpixel (it renders at the drawn size).
+            d.setTint(color);
+            d.setBounds(0, 0, iw, ih);
+            int save = canvas.save();
+            canvas.translate(cx - iw * u / 2, cy - ih * u / 2);
+            canvas.scale(u, u);
+            d.draw(canvas);
+            canvas.restoreToCount(save);
         }
-    }
-
-    private static void drawLocked(Canvas canvas, Bitmap b, float cx, float cy, float pointSize, int color) {
-        float w = b.getWidth() * pointSize / PX_PER_POINT, h = b.getHeight() * pointSize / PX_PER_POINT;
-        PAINT.setColor(color);
-        RECT.set(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
-        canvas.drawBitmap(b, null, RECT, PAINT);
     }
 
     private static final int SUN = 0xFFF5C451, MOON = 0xFFE9E2BE, CLOUD = 0xFFEEF2F7, GRAY = 0xFFB9C1CC, RAIN = 0xFF6FB4FF,
@@ -94,7 +87,7 @@ final class Symbols {
         }
         // Rain and storms: a white cloud, raised, with the rain (three slanted strokes) or the bolt under it.
         draw(c, canvas, "cloud", cx, cy - u * 0.14f, pointSize * 0.86f, CLOUD);
-        synchronized (PAINT) {
+        synchronized (LOCK) {
             if (name.equals("thunderstorm")) {
                 float s = u * 0.2f, x = cx, y = cy + u * 0.16f;
                 BOLT_PATH.reset();
@@ -123,14 +116,16 @@ final class Symbols {
 
     /** Weather symbol for an Open-Meteo WMO weather code. */
     static String weather(int code, boolean day) {
-        if (code <= 1) return day ? "sunny" : "clear_night";
-        if (code == 2) return day ? "partly_cloudy_day" : "partly_cloudy_night";
-        if (code == 3) return "cloud";
-        if (code == 45 || code == 48) return "foggy";
-        if (code >= 51 && code <= 57) return "rainy";
-        if (code == 65 || code == 67 || code == 82) return "rainy";
-        if (code >= 71 && code <= 77 || code == 85 || code == 86) return "snowflake";
-        if (code >= 95) return "thunderstorm";
-        return "rainy";
+        switch (HomeData.kind(code)) {
+            case HomeData.UNKNOWN:
+            case HomeData.CLEAR:
+            case HomeData.MOSTLY_CLEAR: return day ? "sunny" : "clear_night";
+            case HomeData.PARTLY_CLOUDY: return day ? "partly_cloudy_day" : "partly_cloudy_night";
+            case HomeData.CLOUDY: return "cloud";
+            case HomeData.FOG: return "foggy";
+            case HomeData.SNOW: return "snowflake";
+            case HomeData.STORM: return "thunderstorm";
+            default: return "rainy";
+        }
     }
 }

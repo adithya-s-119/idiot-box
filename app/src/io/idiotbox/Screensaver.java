@@ -12,13 +12,17 @@ public class Screensaver extends DreamService {
 
     @Override public void onAttachedToWindow() {
         super.onAttachedToWindow();
-        Watchdog.install(this);
-        Ui.init(this);
+        if (inHomeProcess()) Watchdog.install(this);
         setInteractive(false);
         setFullscreen(true);
         setScreenBright(true);
         view = new DreamView(this);
         setContentView(view);
+    }
+
+    /** In :home, beside the home screen, whose watchdog counts its crashes too. */
+    boolean inHomeProcess() {
+        return true;
     }
 
     @Override public void onDreamingStarted() {

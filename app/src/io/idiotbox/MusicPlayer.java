@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * The Music tab's player: a song chosen on the tab plays in Idiot Box's music engine (MusicEngine), in the background
- * with nothing shown. What comes after it is the engine's (YouTube Music's radio for it), and next and previous are its
+ * with nothing shown. What comes after it is the engine's (its radio for it, with Prism), and next and previous are its
  * too (Music.next). Searches can be kept as rows.
  */
 final class MusicPlayer {
@@ -33,15 +33,12 @@ final class MusicPlayer {
 
     // MARK: - The rows: saved searches
 
-    /** None at first: a held OK on a search saves it. */
-    static final List<String> DEFAULT_ROWS = new ArrayList<>();
-
-    /** The saved searches, in order. */
+    /** The saved searches, in order: none at first (a held OK on a search saves it). */
     List<String> rows() {
         List<String> out = new ArrayList<>();
         try {
             String saved = prefs().getString("rows", null);
-            if (saved == null) return new ArrayList<>(DEFAULT_ROWS);
+            if (saved == null) return out;
             JSONArray a = new JSONArray(saved);
             for (int i = 0; i < a.length(); i++) out.add(a.getString(i));
         } catch (Exception ignored) {

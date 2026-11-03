@@ -5,13 +5,14 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.media.tv.TvContract;
 import android.net.Uri;
-import android.os.Build;
 
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -57,10 +58,11 @@ final class TvPicks {
             TvContract.WatchNextPrograms.COLUMN_INTENT_URI, TvContract.WatchNextPrograms.COLUMN_TYPE,
             TvContract.WatchNextPrograms.COLUMN_INTERNAL_PROVIDER_ID, TvContract.WatchNextPrograms.COLUMN_DURATION_MILLIS,
             TvContract.WatchNextPrograms.COLUMN_LAST_PLAYBACK_POSITION_MILLIS, TvContract.WatchNextPrograms.COLUMN_SHORT_DESCRIPTION,
-            // CloudStream puts the TMDB id here in its channels (and in internal_provider_id in Watch Next); Android 9+.
-            Build.VERSION.SDK_INT >= 28 ? "content_id" : TvContract.WatchNextPrograms.COLUMN_INTERNAL_PROVIDER_ID,
+            // CloudStream puts the TMDB id here in its channels (and in internal_provider_id in Watch Next).
+            "content_id",
         };
         PackageManager pm = c.getPackageManager();
+        Map<String, String> labels = new HashMap<>();   // per app, null: not launchable (each a call to the system)
         int added = 0, rows = 0;
         try (Cursor cur = c.getContentResolver().query(uri, columns, null, null, order)) {
             if (cur == null) {
@@ -72,7 +74,8 @@ final class TvPicks {
                 String pkg = cur.getString(1), title = cur.getString(2);
                 String image = first(cur.getString(6), cur.getString(7));
                 if (pkg == null || pkg.equals(HomeMode.PKG) || title == null || title.trim().isEmpty() || image == null) continue;
-                if (HomeApps.launchIntent(pm, pkg) == null) continue;
+                if (!labels.containsKey(pkg)) labels.put(pkg, HomeApps.launchIntent(pm, pkg) == null ? null : label(pm, pkg, pkg));
+                if (labels.get(pkg) == null) continue;
                 if (!seen.add(pkg + "|" + title.trim())) continue;
                 Recs.Pick p = new Recs.Pick();
                 p.id = (int) cur.getLong(0);
@@ -95,9 +98,8 @@ final class TvPicks {
                 p.meta = meta(p.title, season, episode, cur.getString(3), cur.getString(13), watchNext);
                 p.backdrop = image;
                 p.pkg = pkg;
-                p.app = label(pm, pkg);
+                p.app = labels.get(pkg);
                 p.link = cur.getString(8);
-                p.detailed = true;
                 p.resume = watchNext;
                 out.add(p);
                 added++;
@@ -142,11 +144,12 @@ final class TvPicks {
         return String.join(" · ", parts);
     }
 
-    private static String label(PackageManager pm, String pkg) {
+    /** The app's name, or `fallback` when it isn't installed. */
+    static String label(PackageManager pm, String pkg, String fallback) {
         try {
             return pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString();
         } catch (PackageManager.NameNotFoundException e) {
-            return pkg;
+            return fallback;
         }
     }
 

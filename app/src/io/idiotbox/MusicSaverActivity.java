@@ -15,8 +15,6 @@ import android.view.WindowManager;
  */
 public class MusicSaverActivity extends Activity implements Music.Listener {
     static final long IDLE_MS = 15_000;
-    /** On the screen now (the Music tab's player comes back here, not to the home screen). */
-    static boolean visible;
     private static final long STOPPED_MS = 5 * 60_000;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -39,7 +37,6 @@ public class MusicSaverActivity extends Activity implements Music.Listener {
         super.onStart();
         Music.addListener(this);
         handler.post(check);
-        visible = true;
     }
 
     @Override public void musicChanged() {
@@ -80,7 +77,6 @@ public class MusicSaverActivity extends Activity implements Music.Listener {
     /** Gone from the screen (Home, another app): the home screen next time, not this. */
     @Override protected void onStop() {
         super.onStop();
-        visible = false;
         Music.removeListener(this);
         handler.removeCallbacks(check);
         finish();

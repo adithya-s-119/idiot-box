@@ -15,7 +15,7 @@ Open source. One button to go back to Amazon's.
 - **Your apps, front and center.** The streaming apps you use, on a glass shelf. Pick them and their order on the TV.
 - **Picks, not promos.** Continue watching and fresh titles from what's trending, only from apps you already have.
 - **Live TV.** Channels from M3U playlists, with an XMLTV guide. The remote's Live TV button goes straight to Idiot Box.
-- **Music.** YouTube Music's home rows and search, played through [Prism](https://github.com/Yigder/Prism).
+- **Music.** Home rows and search from your music app (BitChord TV, [Prism](https://github.com/Yigder/Prism) or another that shares its music), played through it.
 - **Weather, one press away.** The hour-by-hour forecast, sunrise and sunset.
 - **A screensaver to match**, and a music screensaver while something plays.
 - **Set up on the TV or from your phone.** Language, city, TMDB key, playlists and guides.
@@ -55,7 +55,7 @@ You need a Fire TV (Fire OS 7 or 8: Fire TV Stick, Stick 4K, Cube or a Fire TV E
    the screensaver, and lets the music screensaver see what's playing.
 6. **On the TV**, open *Idiot Box* → *Home Screen* → *Idiot Box*.
 
-For the Music tab, install [Prism](https://github.com/Yigder/Prism) too.
+For the Music tab, install a music app that shares its music, such as BitChord TV or [Prism](https://github.com/Yigder/Prism). Idiot Box uses whichever of those two is installed; to use another, pick it under Home Settings → Music provider.
 
 ## Going back
 
@@ -79,7 +79,6 @@ phone), and the TV's choice wins:
 |---|---|---|
 | `tmdb_key` | Your free TMDB key, for the picks | empty |
 | `tmdb_region` | Your country (two letters): which titles are on which app | `US` |
-| `watchmode_key` | Optional, free [Watchmode](https://api.watchmode.com/) key: a pick opens the title's page in its app | empty |
 | `latitude`, `longitude` | Your city, for the weather | New York |
 | `city` | The name on the weather card | `Weather` |
 | `hide_animation` | Leave cartoons and anime out of the picks | `false` |
@@ -97,23 +96,18 @@ in `config.properties`, or on the TV open *Idiot Box* → *Home Settings* → *S
 and the page it opens on your phone (on the same Wi-Fi) takes the key, your city, and Live TV's M3U playlists and
 XMLTV guides. It's your key: `config.properties` stays out of git.
 
-### Opening a title, not just its app (optional)
-
-With a free [Watchmode](https://api.watchmode.com/) key (`watchmode_key=`), a pick opens its own page in the streaming
-app instead of the app's home, where the app takes the title's web address (tested: Prime Video and JioHotstar).
-
 ## How it works
 
 - **A plain Android app, no Gradle, no libraries.** [`build.sh`](build.sh) runs aapt2 → javac → d8 → zipalign →
-  apksigner and makes a 2 MB APK.
+  apksigner and makes an APK under 1 MB.
 - **Over Amazon's home screen, not instead of it.** Fire OS protects its launcher and ignores other home screens, so
   an accessibility service ([`FireTvService`](app/src/io/idiotbox/FireTvService.java)) opens Idiot Box whenever
   Amazon's home comes to the front, covering it at once so it never flashes.
 - **Drawn by hand on one Canvas**, at 60 fps on the stick's own chip.
 - **A safety net.** A watchdog in a separate process gives the Home button back to Amazon after three crashes in five
   minutes.
-- **Data** from TMDB (trending titles, new releases and which app streams what in your country) and Open-Meteo
-  (forecast, sunrise and sunset).
+- **Data** from TMDB (trending titles, new releases and which app streams what in your country), Open-Meteo
+  (forecast, sunrise and sunset) and, for the music screensaver, YouTube's covers and LRCLIB's timed lyrics.
 
 | File | What it is |
 |---|---|
@@ -122,7 +116,7 @@ app instead of the app's home, where the app takes the title's web address (test
 | [`FireTvService.java`](app/src/io/idiotbox/FireTvService.java) | Opens Idiot Box over Amazon's home screen |
 | [`Recs.java`](app/src/io/idiotbox/Recs.java), [`TvPicks.java`](app/src/io/idiotbox/TvPicks.java) | The picks (TMDB, and the apps' own rows) |
 | [`Live.java`](app/src/io/idiotbox/Live.java), [`LiveSource.java`](app/src/io/idiotbox/LiveSource.java) | Live TV: playlists and guides |
-| [`MusicEngine.java`](app/src/io/idiotbox/MusicEngine.java) | The Music tab, through Prism |
+| [`MusicEngine.java`](app/src/io/idiotbox/MusicEngine.java) | The Music tab, through the music app (its media browser) |
 | [`HomeData.java`](app/src/io/idiotbox/HomeData.java) | The weather |
 | [`HomeApps.java`](app/src/io/idiotbox/HomeApps.java) | The shelf, inputs and All Apps |
 | [`DreamView.java`](app/src/io/idiotbox/DreamView.java) | The screensaver |
@@ -145,17 +139,19 @@ Russian and Thai were translated by hand and are the reference; the others were 
 
 ## Privacy
 
-No accounts, no analytics, no tracking. The app talks to TMDB, Open-Meteo (with the coordinates you set), Watchmode
-only when you set a `watchmode_key`, and the playlists and guides you add. Your settings stay on your computer and
-your TV. The set-up-from-your-phone page runs on the TV only while that screen is open, on your Wi-Fi.
+No accounts, no analytics, no tracking. The app talks to TMDB, Open-Meteo (with the coordinates you set, and the city
+you look up), and Live TV's playlists and guides (the built-in ones or yours). While music plays, it gets the song's
+cover from YouTube (i.ytimg.com) and its timed lyrics from [LRCLIB](https://lrclib.net) (sending the title, artist and
+length). Your settings stay on your computer and your TV. The set-up-from-your-phone page runs on the TV only while
+that screen is open, on your Wi-Fi.
 
 ## Credits
 
 - Idiot Box is a fork of [Free My TV](https://github.com/simbasjungles/free-my-tv) (MIT), cut down to Fire TV.
-- Music through [Prism](https://github.com/Yigder/Prism).
+- Music through BitChord TV or [Prism](https://github.com/Yigder/Prism).
 - This product uses the TMDB API but is not endorsed or certified by [TMDB](https://www.themoviedb.org/).
-- Links to the titles in the streaming apps by [Watchmode](https://api.watchmode.com/).
 - Weather data by [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0).
+- Timed lyrics from [LRCLIB](https://lrclib.net); covers from YouTube's video thumbnails.
 - Icons: [Material Symbols](https://fonts.google.com/icons) (Apache 2.0). Font: [Inter](https://rsms.me/inter/) (SIL OFL 1.1).
 - Not affiliated with Amazon or any streaming service. App names and logos belong to their owners.
 
