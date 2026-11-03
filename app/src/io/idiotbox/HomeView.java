@@ -164,6 +164,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final RectF rowRect = new RectF(), cardBase = new RectF();
     // 0: focus on the titles (big cards, small app icons); 1: focus on the apps (small cards, big app cards).
     private final Spring appsExpand = new Spring(0.42f, 0.92f, 0);
+    // The daily wallpaper behind the picks, tabs, apps and drawer (0: the pick's photo / the app's glow; 1: the wallpaper).
+    private final Spring wallpaperMix = new Spring(0.3f, 1f, 0);
+    private boolean wallpaperOn;
+    private String wallpaperSource = "off";
+    private int wallpaperPrefsVersion = -1;
     private final RectF pillsRect = new RectF(), chipRect = new RectF();
     private LinearGradient appSheen, appRim;
     private final Matrix appShaderMatrix = new Matrix();
@@ -475,6 +480,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // First time: right away (a cold start opens with the apps already there); missing logos and the drawer's
         // inputs come from reload().
         setShelf(HomeApps.shelf(a, false));
+        Wallpaper.listen(() -> {
+            if (running) {
+                wake();
+                sky.invalidate();
+            }
+        });
     }
 
     // MARK: - Lifecycle (called by HomeActivity)
@@ -496,6 +507,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         recs.refreshIfStale();
         readTabs();   // Settings > Tabs may have changed while away
         Live.refresh(getContext(), this::liveFetched);   // ready before the Live TV tab is opened
+        // The wallpaper is read back from its daily cache when the home returns (and after an off/on).
+        String wallpaper = Prefs.wallpaperSource();
+        if (!"off".equals(wallpaper)) Wallpaper.start(getContext(), wallpaper);
         if (tvInputs != null) tvInputs.registerCallback(inputCallback, handler);
         handler.postDelayed(tick, 15_000);
         checkNotices();
@@ -531,6 +545,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     void destroy() {
         pause();
+        Wallpaper.listen(null);
         if (launcherApps != null) launcherApps.unregisterCallback(packages);
         click.release();
     }
@@ -741,6 +756,20 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lastNanos = frameTimeNanos;
         long up = SystemClock.uptimeMillis();
 
+        if (wallpaperPrefsVersion != Prefs.version) {
+            wallpaperPrefsVersion = Prefs.version;
+            String source = Prefs.wallpaperSource();
+            wallpaperOn = !"off".equals(source) && !source.isEmpty();
+            if (!source.equals(wallpaperSource)) {
+                wallpaperSource = source;
+                if (wallpaperOn) Wallpaper.start(getContext(), source);
+            }
+        }
+        // On every row, including the picks row the home opens on (the pick's title fades out, below).
+        wallpaperMix.target = wallpaperOn && Wallpaper.image() != null ? 1 : 0;
+        boolean wallpaperMoving = wallpaperMix.step(dt);
+        if (!wallpaperOn && wallpaperMix.value < 0.01f && Wallpaper.image() != null) Wallpaper.clear();
+
         boolean tilesMoving = step(tileFocus, dt);
         if (reorderAnim) tilesMoving |= stepReorder(dt, up);
         appsExpand.target = !shelf.isEmpty() && (zone == Z_SHELF || zone == Z_DRAWER || drawer.target > 0) ? 1 : 0;
@@ -769,13 +798,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (heroMoving || heroDirty || bgFading) invalidateHero();
         if (drawerItemsMoving || drawerDirty || bgFading) drawerLayer.invalidate();
         if (gridMoving || gridDirty) sheetLayer.invalidate();
-        if (drawerMoving || bgFading) sky.invalidate();
+        if (drawerMoving || bgFading || wallpaperMoving) sky.invalidate();
+        if (wallpaperMoving) heroLayer.invalidate();   // the pick's title fades out under the wallpaper
         tilesDirty = statusDirty = heroDirty = drawerDirty = gridDirty = motionDirty = false;
         if (updateClock()) heroLayer.invalidate();   // the time at the top right, or the big clock without picks
 
         // Busy: something is moving, or the sheet or the drawer is open.
         boolean busy = tilesMoving || heroMoving || drawerItemsMoving || gridMoving || drawerMoving || sheetMoving
-                || toastFading || bgFading || drifting || sheetOpen || sheet.value > 0.001f
+                || toastFading || bgFading || drifting || wallpaperMoving || sheetOpen || sheet.value > 0.001f
                 || drawerOpen || drawer.value > 0.001f || toast != null || !toasts.isEmpty();
         idle = !busy;
         if (busy) Choreographer.getInstance().postFrameCallback(this);
@@ -836,6 +866,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         clockMinute = minute;
         clockText = Ui.clock(now);
         dateText = Ui.date(now);
+        if (wallpaperOn) Wallpaper.start(getContext(), wallpaperSource);   // a new day: today's photo
         return true;
     }
 
@@ -2714,7 +2745,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         return nearest(cardRects, cards.size(), rowScroll.target * (cardRects[1].left - cardRects[0].left), x);
     }
 
-    /** Background: the focused card's photo (its blurred version until the photo comes); without one, a dark gradient. */
+    /** Background: the focused card's photo, the daily wallpaper, or a dark gradient. */
     private void drawLightSky(Canvas c) {
         long up = SystemClock.uptimeMillis();
         if (ambient && slideNow != null) {
@@ -2733,6 +2764,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         float e = bgFadeAt == 0 ? 1 : fadeEase(bgFadeAt, up);
         boolean fading = bgFadeAt != 0;
+        Bitmap wall = Wallpaper.image();
+        float wm = wall == null ? 0 : wallpaperMix.value;
         if (bgTo == null || (fading && bgFrom == null)) {
             if (skyGradient == null) skyGradient = Ui.gradient(h, 0xFF1C1C1E, 0xFF0B0B0D);
             fill.setShader(skyGradient);
@@ -2740,8 +2773,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             c.drawRect(screen, fill);
             fill.setShader(null);
         }
-        if (fading && bgFrom != null) drawLightImage(c, bgFrom, bgTo == null ? 1 - e : 1);
-        if (bgTo != null) drawLightImage(c, bgTo, fading ? e : 1);
+        if (wall != null && wm > 0.001f) drawImage(c, wall, wm);
+        if (fading && bgFrom != null) drawLightImage(c, bgFrom, (bgTo == null ? 1 - e : 1) * (1 - wm));
+        if (bgTo != null) drawLightImage(c, bgTo, (fading ? e : 1) * (1 - wm));
         float veil = 0.42f * Ui.clamp(drawer.value);   // the drawer open: the background darkens
         if (veil > 0.002f) {
             fill.setColor(Ui.alpha(0xFF000000, veil));
@@ -2754,15 +2788,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             imagePaint.setAlpha(255);
         }
         drawAppGlow(c);
-        if (bgTo != null || bgFrom != null || appsExpand.value > 0.01f) drawScrims(c);
+        if (bgTo != null || bgFrom != null || appsExpand.value > 0.01f || wm > 0.001f) drawScrims(c);
     }
 
     /**
      * With focus on the apps: the focused app's colors, a soft blurred glow over the photo (YouTube's red for
-     * TizenTube), coming in as the apps row grows.
+     * TizenTube), coming in as the apps row grows. It fades away when the daily wallpaper is showing.
      */
     private void drawAppGlow(Canvas c) {
-        float e = appsExpand.value;
+        float e = Math.max(0, appsExpand.value - wallpaperMix.value);
         if (e < 0.01f || shelf.isEmpty() || zone != Z_SHELF && zone != Z_DRAWER) return;
         HomeApps.Item it = shelf.get(Math.min(shelfIndex, shelf.size() - 1));
         if (it.blur != null) {
@@ -2869,6 +2903,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         Recs.Pick p = focusedPick();
         if (p == null) return;
+        // The wallpaper shows the pick's title no more: fade the title, label, details and bar out with it.
+        float a = 1 - wallpaperMix.value;
+        if (a <= 0.002f) return;
         float x = MARGIN * k, labelY;
         Backdrop b = recs.backdrop(p);
         Bitmap logo = b == null ? null : b.logo;
@@ -2879,8 +2916,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             float lw = logo.getWidth() * scale, lh = logo.getHeight() * scale;
             float top = (L_LOGO_TOP + 150) * k - lh;   // on the box's bottom line, like the text
             tmp.set(x, top, x + lw, top + lh);
-            imagePaint.setAlpha(255);
+            imagePaint.setAlpha(Math.round(255 * a));
             c.drawBitmap(logo, null, tmp, imagePaint);
+            imagePaint.setAlpha(255);
             labelY = top - HERO_LABEL_GAP * k;
         } else {
             if (heroTextPick != p || heroTextLayout == null) {
@@ -2890,7 +2928,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             float top = (L_LOGO_TOP + 150) * k - heroTextLayout.getHeight();
             c.save();
             c.translate(x, top);
+            titlePaint.setAlpha(Math.round(255 * a));
             heroTextLayout.draw(c);
+            titlePaint.setAlpha(255);
             c.restore();
             labelY = labelOverText(top);
         }
@@ -2907,11 +2947,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             heroMeta = TextUtils.ellipsize(meta, fitPaint, HERO_TITLE_W * k, TextUtils.TruncateAt.END).toString();
             heroLabel = Recs.serviceName(p).toUpperCase(Ui.locale());
         }
-        text(c, heroLabel, x, labelY, labelPaint, 0xFFFFFFFF, 0.78f);
-        text(c, heroMeta, x, L_HERO_META * k, metaPaint, 0xFFFFFFFF, 0.85f);
+        text(c, heroLabel, x, labelY, labelPaint, 0xFFFFFFFF, 0.78f * a);
+        text(c, heroMeta, x, L_HERO_META * k, metaPaint, 0xFFFFFFFF, 0.85f * a);
         if (p.progress > 0) {
             tmp.set(x, L_HERO_BAR * k, x + 440 * k, (L_HERO_BAR + 6) * k);
-            progressBar(c, tmp, p.progress, 0x38FFFFFF, ACCENT);
+            progressBar(c, tmp, p.progress, Ui.alpha(0x38FFFFFF, a), Ui.alpha(ACCENT, a));
         }
     }
 

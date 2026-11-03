@@ -61,6 +61,12 @@ without `undo`? Install again and run `undo`: the Amazon apps stay off and the s
   overlays aren't). `LiveTvActivity` takes the remote's Live TV button links (Amazon's Live TV app is off). Fire OS's
   adbd never answers the device itself, so the app has no ADB: `HomeMode` only records the mode, which the service
   follows, and `tools/firetv.sh` does the rest from a computer.
+- **Daily wallpaper:** Home Settings → Wallpaper picks Off, Bing's photo of the day, NASA APOD (the picture on the
+  APOD page; its free API is the fallback, and video days show the video's thumbnail) or Lorem Picsum (a random photo,
+  seeded by the date). `Wallpaper` caches
+  one photo a day per source, at the backdrop size, and the home screen cross-fades to it on every row (the pick's
+  title, label and details fade out with it); `Prefs.wallpaperSource` holds the choice. A failed fetch keeps
+  yesterday's photo and retries after 15 minutes.
 - The home screen is drawn by hand on one Canvas (`HomeView`). Keep it at 60 fps: no allocations in `onDraw`, no work on
   the UI thread (HTTP goes through `Net`, on its background queues). The stick has about 1 GB of RAM: every MB counts.
 - `HomeMode` runs the switch as a background job (`ModeJob`) in the main process; the UI is in the `:home` process.

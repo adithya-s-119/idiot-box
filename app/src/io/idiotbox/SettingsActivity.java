@@ -114,11 +114,11 @@ public class SettingsActivity extends Activity {
         private static final int MAIN = 0, HOME_CHOICE = 1, HOME_SETTINGS = 2, PICKER = 3, SHELF_EDIT = 4, PHONE = 5;
         // The sidebar: PANEL_W wide, SIDE from the right edge, its text TOP from the top and bottom (and PAD in).
         private static final float PANEL_W = 680, SIDE = 48, TOP = 16, PAD = 36, FADE = 560;
-        private static final float ROWS_TOP = 140, ROW_H = 74, ROW_GAP = 10, SECTION = 44, BREAK = 18;
+        private static final float ROWS_TOP = 128, ROW_H = 70, ROW_GAP = 9, SECTION = 44, BREAK = 18;
         private static final int PICK_VISIBLE = 8;
         private static final int WHITE = 0xFFF4F4F6, INK = 0xFF0A0B0F;
         private static final String[] MAIN_SYMBOLS = {"home", "bedtime", "settings", "apps", "live_tv", "tv_settings"};
-        private static final String[] SETTING_SYMBOLS = {"settings", "speaker", "sparkles", "sunny", "live_tv", "tv", "play", "sync"};
+        private static final String[] SETTING_SYMBOLS = {"settings", "speaker", "sparkles", "sunny", "live_tv", "tv", "play", "sync", "wallpaper"};
         /** The mode and the picks' state, read from their files off the main thread. */
         private static final ExecutorService io = Executors.newSingleThreadExecutor();
 
@@ -137,7 +137,7 @@ public class SettingsActivity extends Activity {
         private final List<String> shelfOrder = new ArrayList<>();
         private boolean editingTabs;
         private int pickFor, pickCurrent, pickScroll;
-        private static final int PICK_LANGUAGE = -1, PICK_CITY = -2, PICK_MUSIC = -3;
+        private static final int PICK_LANGUAGE = -1, PICK_CITY = -2, PICK_MUSIC = -3, PICK_WALLPAPER = -4;
         // Home Settings → Music provider: the apps that share their music, as {package, name}, once found (null before).
         private List<String[]> providers;
         // Home Settings → Location: the places found for what was typed (when more than one), or why none was.
@@ -401,7 +401,8 @@ public class SettingsActivity extends Activity {
                 name = Ui.tr("Settings");
                 from = versionText;
             } else if (screen == PICKER) {
-                name = pickFor == PICK_LANGUAGE ? Ui.tr("Language") : pickFor == PICK_MUSIC ? Ui.tr("Music provider") : Ui.tr("Location");
+                name = pickFor == PICK_LANGUAGE ? Ui.tr("Language") : pickFor == PICK_MUSIC ? Ui.tr("Music provider")
+                    : pickFor == PICK_WALLPAPER ? Ui.tr("Wallpaper") : Ui.tr("Location");
                 from = Ui.tr("Home Settings");
             } else if (screen == PHONE) {
                 name = Ui.tr("Set up from your phone");
@@ -654,6 +655,9 @@ public class SettingsActivity extends Activity {
             } else if (screen == PICKER && pickFor == PICK_CITY) {
                 focus = 3;
                 screen = HOME_SETTINGS;
+            } else if (screen == PICKER && pickFor == PICK_WALLPAPER) {
+                focus = 8;
+                screen = HOME_SETTINGS;
             } else if (screen == PICKER && pickFor == PICK_MUSIC) {
                 focus = 6;
                 screen = HOME_SETTINGS;
@@ -678,7 +682,8 @@ public class SettingsActivity extends Activity {
             if (labels == null || labelsGeneration != Ui.generation) {
                 labelsGeneration = Ui.generation;
                 labels = new String[] {Ui.tr("Language"), Ui.tr("Navigation sounds"), Ui.tr("TMDB key"), Ui.tr("Location"),
-                        Ui.tr("Live TV channels"), Ui.tr("TV guide"), Ui.tr("Music provider"), Ui.tr("Set up from your phone")};
+                        Ui.tr("Live TV channels"), Ui.tr("TV guide"), Ui.tr("Music provider"), Ui.tr("Set up from your phone"),
+                        Ui.tr("Wallpaper")};
                 mainLabels = new String[] {Ui.tr("Home Screen"), Ui.tr("Screensaver"), Ui.tr("Home Settings"), Ui.tr("Shelf"),
                         Ui.tr("Tabs"), Ui.tr("TV Settings")};
             }
@@ -693,7 +698,7 @@ public class SettingsActivity extends Activity {
             valuesGeneration = Ui.generation;
             valuesVersion = Prefs.version;
             valuesNote = locationNote;
-            String[] v = values = new String[8];
+            String[] v = values = new String[9];
             String lang = Prefs.language();
             v[0] = lang.equals("auto") ? Ui.tr("Automatic") : Ui.languageName(lang);
             v[1] = Prefs.sounds() ? Ui.tr("On") : Ui.tr("Off");
@@ -704,7 +709,21 @@ public class SettingsActivity extends Activity {
             v[5] = Prefs.ownGuides() ? Ui.plural("plural|one:{n} guide|other:{n} guides", Prefs.guides().size()) : Ui.tr("Built-in");
             v[6] = MusicEngine.pkg().isEmpty() ? Ui.tr("None") : MusicEngine.name(getContext());
             v[7] = "";
+            v[8] = wallpaperLabel(Prefs.wallpaperSource());
             return v;
+        }
+
+        private static String[] wallpaperSources() {
+            return new String[] {"off", "bing", "nasa", "picsum"};
+        }
+
+        private static String wallpaperLabel(String source) {
+            switch (source) {
+                case "bing": return "Bing";
+                case "nasa": return "NASA APOD";
+                case "picsum": return "Picsum";
+                default: return Ui.tr("Off");
+            }
         }
 
         private void drawSettings(Canvas c) {
@@ -721,6 +740,7 @@ public class SettingsActivity extends Activity {
                 case 2: what = Ui.tr("OK sets it from your phone.") + "\n" + recsLine(); break;
                 case 3: what = Ui.tr("Your city, for the weather.") + "\n" + Ui.tr("OK opens the keyboard."); break;
                 case 6: what = Ui.tr("The app the Music tab browses and searches."); break;
+                case 8: what = Ui.tr("OK opens the list."); break;
                 default: what = Ui.tr("OK sets it from your phone.");
             }
             drawHint(c, belowRows(labels.length), what);
@@ -994,6 +1014,22 @@ public class SettingsActivity extends Activity {
             pickScroll = 0;
         }
 
+        /** The wallpaper source: Off, Bing, NASA APOD or Picsum. */
+        private void openWallpaperPicker() {
+            pickFor = PICK_WALLPAPER;
+            pickLabels.clear();
+            pickLabels.add(Ui.tr("Off"));
+            pickLabels.add("Bing");
+            pickLabels.add("NASA APOD");
+            pickLabels.add("Picsum");
+            pickCurrent = java.util.Arrays.asList(wallpaperSources()).indexOf(Prefs.wallpaperSource());
+            int visible = Math.min(PICK_VISIBLE, pickLabels.size());
+            int at = Math.max(0, pickCurrent);
+            pickScroll = Math.max(0, Math.min(at - 3, pickLabels.size() - visible));
+            focus = at - pickScroll;
+            screen = PICKER;
+        }
+
         /** A long list (the languages, the places, the music apps): eight rows at a time, the one in use checked. */
         private void drawPicker(Canvas c) {
             int rows = rowCount();
@@ -1020,6 +1056,10 @@ public class SettingsActivity extends Activity {
             } else if (screen == PICKER && pickFor == PICK_LANGUAGE) {
                 Prefs.setLanguage(languageChoices()[pickScroll + focus]);
                 focus = 0;
+                screen = HOME_SETTINGS;
+            } else if (screen == PICKER && pickFor == PICK_WALLPAPER) {
+                Prefs.setWallpaperSource(wallpaperSources()[pickScroll + focus]);
+                focus = 8;
                 screen = HOME_SETTINGS;
             } else if (screen == PICKER && pickFor == PICK_MUSIC) {
                 int at = pickScroll + focus;
@@ -1051,6 +1091,8 @@ public class SettingsActivity extends Activity {
                 return;
             } else if (screen == HOME_SETTINGS && focus == 6) {
                 openMusicPicker();
+            } else if (screen == HOME_SETTINGS && focus == 8) {
+                openWallpaperPicker();
             } else if (screen == HOME_SETTINGS) {
                 openPhone();
             } else if (focus == 0) {

@@ -13,6 +13,7 @@ Open source. One button to go back to Amazon's.
 
 - **No ads.** No sponsored rows, banners or autoplaying promos.
 - **Your apps, front and center.** The streaming apps you use, on a glass shelf. Pick them and their order on the TV.
+- **A new wallpaper every day**, if you want one: Bing's photo of the day, NASA's APOD or a random Picsum photo — all free — behind the picks, tabs and apps.
 - **Picks, not promos.** Continue watching and fresh titles from what's trending, only from apps you already have.
 - **Live TV.** Channels from M3U playlists, with an XMLTV guide. The remote's Live TV button goes straight to Idiot Box.
 - **Music.** Home rows and search from your music app (BitChord TV, [Prism](https://github.com/Yigder/Prism) or another that shares its music), played through it.
@@ -118,6 +119,7 @@ XMLTV guides. It's your key: `config.properties` stays out of git.
 | [`Live.java`](app/src/io/idiotbox/Live.java), [`LiveSource.java`](app/src/io/idiotbox/LiveSource.java) | Live TV: playlists and guides |
 | [`MusicEngine.java`](app/src/io/idiotbox/MusicEngine.java) | The Music tab, through the music app (its media browser) |
 | [`HomeData.java`](app/src/io/idiotbox/HomeData.java) | The weather |
+| [`Wallpaper.java`](app/src/io/idiotbox/Wallpaper.java) | The daily wallpaper (Bing, NASA APOD or Picsum) |
 | [`HomeApps.java`](app/src/io/idiotbox/HomeApps.java) | The shelf, inputs and All Apps |
 | [`DreamView.java`](app/src/io/idiotbox/DreamView.java) | The screensaver |
 | [`SettingsActivity.java`](app/src/io/idiotbox/SettingsActivity.java) | The settings sidebar (the app's icon) |
@@ -142,7 +144,9 @@ Russian and Thai were translated by hand and are the reference; the others were 
 No accounts, no analytics, no tracking. The app talks to TMDB, Open-Meteo (with the coordinates you set, and the city
 you look up), and Live TV's playlists and guides (the built-in ones or yours). While music plays, it gets the song's
 cover from YouTube (i.ytimg.com) and its timed lyrics from [LRCLIB](https://lrclib.net) (sending the title, artist and
-length). Your settings stay on your computer and your TV. The set-up-from-your-phone page runs on the TV only while
+length). With a daily wallpaper on, it downloads one image a day from **Bing** (bing.com), **NASA's APOD**
+(apod.nasa.gov; its API fallback at api.nasa.gov) or **Lorem Picsum** (picsum.photos), depending on the source you pick. Your settings stay on your
+computer and your TV. The set-up-from-your-phone page runs on the TV only while
 that screen is open, on your Wi-Fi.
 
 ## Credits

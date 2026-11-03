@@ -125,6 +125,18 @@ final class Prefs {
     static boolean sounds() { return sp().getBoolean("sounds", true); }
     static void setSounds(boolean on) { put("sounds", on); }
 
+    /** The home wallpaper's source: "off", "bing", "nasa" or "picsum" (see Wallpaper). */
+    static String wallpaperSource() {
+        String v = sp().getString("wallpaper_source", null);
+        if (v != null) return v;
+        return sp().getBoolean("daily_wallpaper", false) ? "bing" : "off";   // the old on/off setting
+    }
+
+    static void setWallpaperSource(String source) {
+        put("wallpaper_source", source);
+        sp().edit().remove("daily_wallpaper").apply();
+    }
+
     // MARK: - Shelf
 
     /** Packages on the home shelf, in order; null until the user edits it (then the built-in list applies). */
