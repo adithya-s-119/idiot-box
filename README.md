@@ -51,8 +51,9 @@ You need a Fire TV (Fire OS 7 or 8: Fire TV Stick, Stick 4K, Cube or a Fire TV E
    tools/firetv.sh 192.168.1.50 setup
    ```
    It turns off Amazon's ad, promo and telemetry apps (only turned off, never uninstalled), turns on Idiot Box's
-   service (it opens Idiot Box whenever Amazon's home screen comes up, and closes the Alexa overlay), makes Idiot Box
-   the screensaver, and lets the music screensaver see what's playing.
+   service (it opens Idiot Box whenever Amazon's home screen comes up, and closes the Alexa overlay when Alexa is
+   off), makes Idiot Box the screensaver, and lets the music screensaver see what's playing. Alexa is off by default
+   (it costs RAM on a 1 GB stick): `tools/firetv.sh 192.168.1.50 alexa on` turns voice search back on.
 6. **On the TV**, open *Idiot Box* → *Home Screen* → *Idiot Box*.
 
 For the Music tab, install a music app that shares its music, such as BitChord TV or [Prism](https://github.com/Yigder/Prism). Idiot Box uses whichever of those two is installed; to use another, pick it under Home Settings → Music provider.

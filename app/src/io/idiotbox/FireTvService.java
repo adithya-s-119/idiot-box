@@ -1,6 +1,7 @@
 package io.idiotbox;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.os.Handler;
@@ -12,10 +13,10 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 
 /**
- * Fire TV only (see FireTv). When Amazon's home screen comes to the front, opens ours; when the Alexa overlay opens,
- * closes it. The Home button never reaches accessibility services on Fire OS, and Android holds back activity starts
- * for 5 s after it, so Amazon's screen is covered at once by a black overlay (overlays aren't held back) until ours is
- * up. Reads window content only to see whether Alexa's window is still open.
+ * Fire TV only (see FireTv). When Amazon's home screen comes to the front, opens ours. The Home button never reaches
+ * accessibility services on Fire OS, and Android holds back activity starts for 5 s after it, so Amazon's screen is
+ * covered at once by a black overlay (overlays aren't held back) until ours is up. Alexa's overlay is left alone when
+ * Alexa is on (voice search); when Alexa is off, Fire OS can still start it at boot, so its overlay is closed.
  */
 public class FireTvService extends AccessibilityService {
     private static final String HOME_ACTIVITY = "HomeActivity";
@@ -55,7 +56,11 @@ public class FireTvService extends AccessibilityService {
                 FireTv.openHome(this, "Amazon home");
             }
         } else if (FireTv.ALEXA.contentEquals(pkg)) {
-            if (!alexaClosing && active()) {
+            if (alexaOn()) {
+                // Voice search: leave the overlay up, and don't hide it behind our cover.
+                uncover();
+            } else if (!alexaClosing && active()) {
+                // Alexa is off, but Fire OS turns it back on at boot: close the overlay it starts anyway.
                 alexaClosing = true;
                 alexaBacks = 0;
                 handler.postDelayed(closeAlexa, ALEXA_RETRY_MS);
@@ -71,6 +76,17 @@ public class FireTvService extends AccessibilityService {
      */
     private boolean active() {
         return HomeMode.freeActive(this);
+    }
+
+    /** Alexa is on when its package is enabled and not disabled for this user (tools/firetv.sh <ip> alexa on). */
+    private boolean alexaOn() {
+        try {
+            int state = getPackageManager().getApplicationEnabledSetting(FireTv.ALEXA);
+            return state != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                    && state != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     @Override public void onInterrupt() {}

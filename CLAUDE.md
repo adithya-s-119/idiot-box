@@ -33,9 +33,11 @@ before you do it, and let them do the taps on the TV.
    Privacy & Security → Local Network.
 7. **Tell them what setup does** before running it: Amazon's ad, promo and telemetry apps are turned off (never
    uninstalled), Idiot Box's accessibility service goes on (it opens Idiot Box over Amazon's home screen and closes the
-   Alexa overlay), Idiot Box becomes the screensaver, and the music screensaver may read what's playing. `undo` brings
-   it all back. With their OK: `tools/firetv.sh <IP> setup`. Apps someone may use (Prime Video, which takes about
-   140 MB in the background) go off only when they ask: `tools/firetv.sh <IP> off <package>`; `undo` brings them back too.
+   Alexa overlay when Alexa is off), Idiot Box becomes the screensaver, and the music screensaver may read what's
+   playing. Alexa is off by default (it costs RAM on a 1 GB stick); `tools/firetv.sh <IP> alexa on` turns voice search
+   on. `undo` brings it all back. With their OK: `tools/firetv.sh <IP> setup`. Apps someone may use (Prime Video, which
+   takes about 140 MB in the background) go off only when they ask: `tools/firetv.sh <IP> off <package>`; `undo` brings
+   them back too.
 8. **They switch on the TV:** *Idiot Box* → *Home Screen* → *Idiot Box*. Don't switch modes from the computer.
 9. **Music** needs a music app that shares its music, such as BitChord TV (com.music.bitchord.tv) or Prism
    (com.prism.music): the Music tab browses and plays through it. With none picked under Home Settings → Music provider,
@@ -58,7 +60,9 @@ without `undo`? Install again and run `undo`: the Amazon apps stay off and the s
 - **How it takes over:** Fire OS protects its launcher (pm refuses to disable it) and ignores other home activities.
   `FireTvService` (an accessibility service) watches which window is in front: when Amazon's home comes up in Idiot Box
   mode it covers it with a black overlay and opens `HomeActivity` (Android holds activity starts back 5 s after Home;
-  overlays aren't). `LiveTvActivity` takes the remote's Live TV button links (Amazon's Live TV app is off). Fire OS's
+  overlays aren't). **Alexa is off by default** (`tools/firetv.sh <IP> alexa on` turns voice search on): when on, its
+  overlay is left up; when off, the service closes the overlay Fire OS still starts at boot. `LiveTvActivity` takes the
+  remote's Live TV button links (Amazon's Live TV app is off). Fire OS's
   adbd never answers the device itself, so the app has no ADB: `HomeMode` only records the mode, which the service
   follows, and `tools/firetv.sh` does the rest from a computer.
 - The home screen is drawn by hand on one Canvas (`HomeView`). Keep it at 60 fps: no allocations in `onDraw`, no work on

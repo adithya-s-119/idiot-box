@@ -20,7 +20,7 @@ final class FireTv {
     static final boolean IS = "Amazon".equalsIgnoreCase(Build.MANUFACTURER) && Build.MODEL.startsWith("AFT");
 
     static final String LAUNCHER = "com.amazon.tv.launcher";
-    /** The Alexa assistant: Fire OS turns it back on at every boot, so FireTvService closes its overlay. */
+    /** The Alexa assistant: left up when Alexa is on (voice search), closed by FireTvService when it is off. */
     static final String ALEXA = "com.amazon.vizzini";
 
     private static final long DEBOUNCE_MS = 1500;
