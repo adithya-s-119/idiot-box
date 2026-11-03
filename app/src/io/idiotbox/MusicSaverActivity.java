@@ -39,6 +39,16 @@ public class MusicSaverActivity extends Activity implements Music.Listener {
         handler.post(check);
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        NowPlaying.active(true);
+    }
+
+    @Override protected void onPause() {
+        NowPlaying.active(false);
+        super.onPause();
+    }
+
     @Override public void musicChanged() {
         if (Music.track() == null) finish();
     }

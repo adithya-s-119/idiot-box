@@ -76,6 +76,7 @@ public class HomeActivity extends Activity {
             return;
         }
         if (home != null) home.resume();
+        NowPlaying.active(true);
         askForTvListings();
         lastKey = SystemClock.uptimeMillis();
         if (home != null) {
@@ -114,6 +115,7 @@ public class HomeActivity extends Activity {
 
     @Override protected void onPause() {
         Music.removeListener(watchMusic);
+        NowPlaying.active(false);
         idle.removeCallbacks(checkIdle);
         idleArmed = false;
         if (home != null) home.pause();
