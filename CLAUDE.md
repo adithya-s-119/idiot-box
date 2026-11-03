@@ -66,7 +66,9 @@ without `undo`? Install again and run `undo`: the Amazon apps stay off and the s
   `HomeApps.adaptiveLayers` finds adaptive icons by reflection (25 has none); `Backdrop.HARDWARE` is null on 25
   (software bitmaps, no `Bitmap.Config.HARDWARE`); and use `Ui.join` instead of `String.join`, `Net.read` instead of
   `java.nio.file.Files`. Android 7.1 ignores the manifest's `<queries>` and unknown permissions like
-  `REQUEST_DELETE_PACKAGES`.
+  `REQUEST_DELETE_PACKAGES`. The app also bundles ISRG Root X1 and X2
+  (`res/xml/network_security_config.xml`, beside the system store), because Fire OS 6's store may not trust the
+  newer Let's Encrypt roots that some sites (NASA's APOD, for one) chain to.
 - **How it takes over:** Fire OS protects its launcher (pm refuses to disable it) and ignores other home activities.
   On Fire OS 7 and 8, `FireTvService` (an accessibility service) watches which window is in front: when Amazon's home
   comes up in Idiot Box mode it covers it with a black overlay and opens `HomeActivity` (Android holds activity starts

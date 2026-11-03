@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fire OS 6 is Android 7.1.2: its system store trusts ISRG Root X1, but not the newer Let's Encrypt roots that
+     api.nasa.gov and science.nasa.gov chain to. Trust them here, for this app only, beside the system store. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/isrg_root_x1" />
+            <certificates src="@raw/isrg_root_x2" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
