@@ -19,7 +19,6 @@ import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
-import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.Drawable;
 import android.media.tv.TvContract;
 import android.media.tv.TvInputInfo;
@@ -897,27 +896,41 @@ final class HomeApps {
         if (icon == null) return b;
         int size = Math.round(TILE_H * 0.56f);
         float left = (TILE_W - size) / 2f, top = (TILE_H - size) / 2f;
-        if (icon instanceof AdaptiveIconDrawable) {
-            // Adaptive icon: the layers clipped to a squircle, like an Apple icon.
-            AdaptiveIconDrawable a = (AdaptiveIconDrawable) icon;
+        Drawable[] layers = adaptiveLayers(icon);
+        if (layers != null) {
+            // Adaptive icon (Android 8+): the layers clipped to a squircle, like an Apple icon.
             Path clip = new Path();
             clip.addRoundRect(new RectF(left, top, left + size, top + size), size * 0.2237f, size * 0.2237f, Path.Direction.CW);
             canvas.save();
             canvas.clipPath(clip);
             int pad = size / 4;
-            for (Drawable layer : new Drawable[] {a.getBackground(), a.getForeground()}) {
+            for (Drawable layer : layers) {
                 if (layer == null) continue;
                 layer.setBounds(Math.round(left) - pad, Math.round(top) - pad, Math.round(left) + size + pad, Math.round(top) + size + pad);
                 layer.draw(canvas);
             }
             canvas.restore();
         } else {
-            // Legacy icon (a free-form drawing with transparency): smaller, no frame.
+            // Legacy icon (Fire OS 6, or a free-form drawing with transparency): smaller, no frame.
             int s = Math.round(TILE_H * 0.46f);
             icon.setBounds((TILE_W - s) / 2, (TILE_H - s) / 2, (TILE_W + s) / 2, (TILE_H + s) / 2);
             icon.draw(canvas);
         }
         return b;
+    }
+
+    /** An adaptive icon's background and foreground, or null on Fire OS 6, where Android has no adaptive icons. */
+    private static Drawable[] adaptiveLayers(Drawable icon) {
+        try {
+            Class<?> type = Class.forName("android.graphics.drawable.AdaptiveIconDrawable");
+            if (!type.isInstance(icon)) return null;
+            return new Drawable[] {
+                    (Drawable) type.getMethod("getBackground").invoke(icon),
+                    (Drawable) type.getMethod("getForeground").invoke(icon),
+            };
+        } catch (Exception | LinkageError e) {
+            return null;
+        }
     }
 
     /** Settings and the like: the icon in white on a dark card. */

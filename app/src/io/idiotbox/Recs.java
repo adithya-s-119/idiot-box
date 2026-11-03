@@ -534,7 +534,7 @@ final class Recs {
         parts.add(Ui.tr("Trending"));
         parts.add(kind.equals("movie") ? Ui.tr("Movie") : Ui.tr("Series"));
         if (date.length() >= 4) parts.add(date.substring(0, 4));
-        p.meta = String.join(" · ", parts);
+        p.meta = Ui.join(" · ", parts);
         return p;
     }
 
@@ -856,8 +856,9 @@ final class Recs {
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inSampleSize = 1;
         while (bounds.outWidth / (opts.inSampleSize * 2) >= minWidth) opts.inSampleSize *= 2;
-        if (gpu && opts.inSampleSize == 1 && bounds.outWidth == Backdrop.BG_W && bounds.outHeight == Backdrop.BG_H) {
-            opts.inPreferredConfig = Bitmap.Config.HARDWARE;
+        if (gpu && Backdrop.HARDWARE != null && opts.inSampleSize == 1
+                && bounds.outWidth == Backdrop.BG_W && bounds.outHeight == Backdrop.BG_H) {
+            opts.inPreferredConfig = Backdrop.HARDWARE;
         }
         Bitmap b = BitmapFactory.decodeFile(f.getPath(), opts);
         if (b == null) throw new IOException("unreadable image");

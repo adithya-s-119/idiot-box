@@ -1,7 +1,8 @@
 # Idiot Box: notes for Claude
 
-A home screen for Amazon Fire TV (Fire OS 7 = Android 9, Fire OS 8 = Android 11), with picks, Live TV, Music and a
-settings sidebar. A plain Android app in Java, built without Gradle by `build.sh`. It only targets Fire TV.
+A home screen for Amazon Fire TV (Fire OS 6 = Android 7.1, Fire OS 7 = Android 9, Fire OS 8 = Android 11), with picks,
+Live TV, Music and a settings sidebar. A plain Android app in Java, built without Gradle by `build.sh`. It only targets
+Fire TV.
 Before you push, run `tools/check.sh`: the build and `translate.py --check`. Every pull request runs it too
 (`.github/workflows/check.yml`).
 
@@ -32,8 +33,9 @@ before you do it, and let them do the taps on the TV.
    terminal instead (`adb kill-server; adb nodaemon server &`), or allow the terminal app under System Settings →
    Privacy & Security → Local Network.
 7. **Tell them what setup does** before running it: Amazon's ad, promo and telemetry apps are turned off (never
-   uninstalled), Idiot Box's accessibility service goes on (it opens Idiot Box over Amazon's home screen and closes the
-   Alexa overlay), Idiot Box becomes the screensaver, and the music screensaver may read what's playing. `undo` brings
+   uninstalled), Idiot Box's home hook goes on (an accessibility service on Fire OS 7/8; UsageStats on Fire OS 6,
+   which refuses third-party accessibility services), Idiot Box becomes the screensaver, and the music screensaver may
+   read what's playing. On Fire OS 7/8 the accessibility service also closes the Alexa overlay. `undo` brings
    it all back. With their OK: `tools/firetv.sh <IP> setup`. Apps someone may use (Prime Video, which takes about
    140 MB in the background) go off only when they ask: `tools/firetv.sh <IP> off <package>`; `undo` brings them back too.
 8. **They switch on the TV:** *Idiot Box* → *Home Screen* → *Idiot Box*. Don't switch modes from the computer.
@@ -48,24 +50,37 @@ without `undo`? Install again and run `undo`: the Amazon apps stay off and the s
 
 ## The code
 
-- Java 8 language level, minSdk 26, targetSdk 33. No Gradle, no libraries: only the Android SDK.
-  `Ui.LEGACY` is true on both Fire OS 7 (Android 9) and 8 (Android 11), so the home screen skips the GPU layers, draws
-  blurred shadows from cached bitmaps (`Shadows`) and rounds images with a shader instead of clipPath. No AGSL:
-  `HomeView` draws the background and glass flat.
+- Java 8 language level, minSdk 25 (Fire OS 6 = Android 7.1), targetSdk 33. No Gradle, no libraries: only the Android
+  SDK. `Ui.LEGACY` is true on Fire OS 6 (Android 7.1), 7 (Android 9) and 8 (Android 11), so the home screen skips the
+  GPU layers, draws blurred shadows from cached bitmaps (`Shadows`) and rounds images with a shader instead of clipPath.
+  No AGSL: `HomeView` draws the background and glass flat.
   Fire OS 8 (Android 11) runs the screensaver as `ScreensaverAlone`, in the main process (its DreamActivity needs the
-  dream in the app's default process); `res/values-v30/bools.xml` picks it, Fire OS 7 keeps `Screensaver` in `:home`.
-  Keep both in step.
+  dream in the app's default process); `res/values-v30/bools.xml` picks it, Fire OS 6 and 7 keep `Screensaver` in
+  `:home`. Keep both in step.
+- **Fire OS 6 (Android 7.1, API 25)** lacks some newer Android and Java calls; keep these fallbacks:
+  `Ui.font` uses `Typeface.Builder` only from Android 8 (on 25 the variable font's default instance, with a faked
+  weight) and `Ui.weighted` (plain bold below Android 9, which has no `Typeface.create(Typeface, int, boolean)`);
+  `TvPicks` returns no picks below API 26 (Watch Next and preview channels came with Android 8; the old Programs table
+  has nothing to show) and `HomeActivity` asks for no TV-listing permissions there; `DreamView` draws the flip clock's
+  760 px digits as paths (`Paint.getTextPath`), because Fire OS 6's Skia draws nothing with `drawText` at that size;
+  `HomeApps.adaptiveLayers` finds adaptive icons by reflection (25 has none); `Backdrop.HARDWARE` is null on 25
+  (software bitmaps, no `Bitmap.Config.HARDWARE`); and use `Ui.join` instead of `String.join`, `Net.read` instead of
+  `java.nio.file.Files`. Android 7.1 ignores the manifest's `<queries>` and unknown permissions like
+  `REQUEST_DELETE_PACKAGES`.
 - **How it takes over:** Fire OS protects its launcher (pm refuses to disable it) and ignores other home activities.
-  `FireTvService` (an accessibility service) watches which window is in front: when Amazon's home comes up in Idiot Box
-  mode it covers it with a black overlay and opens `HomeActivity` (Android holds activity starts back 5 s after Home;
-  overlays aren't). `LiveTvActivity` takes the remote's Live TV button links (Amazon's Live TV app is off). Fire OS's
-  adbd never answers the device itself, so the app has no ADB: `HomeMode` only records the mode, which the service
-  follows, and `tools/firetv.sh` does the rest from a computer.
+  On Fire OS 7 and 8, `FireTvService` (an accessibility service) watches which window is in front: when Amazon's home
+  comes up in Idiot Box mode it covers it with a black overlay and opens `HomeActivity` (Android holds activity starts
+  back 5 s after Home; overlays aren't). **Fire OS 6 refuses third-party accessibility services** (`A11yAuthorizer`
+  rejects them), so there `FireTvKeeper` (a foreground service, API ≤ 27) reads the foreground app from UsageStats and
+  calls `moveTaskToFront` on our home task, which is not an activity start and so skips the delay; `tools/firetv.sh`
+  grants `GET_USAGE_STATS` and a boot receiver starts it again. `LiveTvActivity` takes the remote's Live TV button links
+  (Amazon's Live TV app is off). Fire OS's adbd never answers the device itself, so the app has no ADB: `HomeMode` only
+  records the mode, which the service follows, and `tools/firetv.sh` does the rest from a computer.
 - The home screen is drawn by hand on one Canvas (`HomeView`). Keep it at 60 fps: no allocations in `onDraw`, no work on
   the UI thread (HTTP goes through `Net`, on its background queues). The stick has about 1 GB of RAM: every MB counts.
 - `HomeMode` runs the switch as a background job (`ModeJob`) in the main process; the UI is in the `:home` process.
   `Watchdog` gives Home back to Amazon after 3 crashes of the `:home` process in 5 minutes (`homeReverted`, which
-  `FireTvService` reads).
+  `FireTvService` and `FireTvKeeper` read).
 - Settings (`SettingsActivity`) is a translucent activity: a sidebar that slides in over the home screen, on black
   that fades out to the left.
 - On-screen text: `Ui.tr("English")`, translated from `app/assets/i18n/<lang>.json` (keyed by the English; one

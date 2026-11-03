@@ -67,7 +67,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final int COLUMNS = 5, VISIBLE_ROWS = 3;
     private static final float GRID_W = 300, GRID_H = 169, GRID_GAP = 40, GRID_ROW = 239, GRID_TOP = 196, GRID_RADIUS = 22;
     private static final int SMOKE = 0xFF111113, INK = 0xFF1C1C1E, WHITE = 0xFFF5F5F7;
-    private static final long TOAST_MS = 6000, FADE_MS = 800;
+    private static final long TOAST_MS = 6000, FADE_MS = 800, GLOW_FADE_MS = 260;
     /** Blur radii of the shadows (Shadows). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
     private static final int SKY = 0, HERO = 1, NOW = 2, STATUS = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7;
@@ -164,11 +164,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final RectF rowRect = new RectF(), cardBase = new RectF();
     // 0: focus on the titles (big cards, small app icons); 1: focus on the apps (small cards, big app cards).
     private final Spring appsExpand = new Spring(0.42f, 0.92f, 0);
+    // The apps row scrolls sideways too when it has focus and its cards no longer fit (many pinned apps).
+    private final Spring shelfScroll = new Spring(0.34f, 1f, 0);
     private final RectF pillsRect = new RectF(), chipRect = new RectF();
     private LinearGradient appSheen, appRim;
     private final Matrix appShaderMatrix = new Matrix();
-    private RadialGradient appGlow;
-    private int appGlowColor;
+    private final Map<Integer, RadialGradient> appGlows = new LinkedHashMap<>();
+    // The apps row's glow cross-fades when the focused app changes (the whole screen is its color).
+    private HomeApps.Item glowItem, glowFrom;
+    private long glowAt;
+    private boolean glowing;
     // The hero's title in text (no logo): made again only when the focused pick changes.
     private Recs.Pick heroTextPick;
     private StaticLayout heroTextLayout;
@@ -669,6 +674,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         k = w / 1920f;
         screen.set(0, 0, w, h);
         makePaints();
+        appGlows.clear();   // their gradients were made at the old size
+        glowing = false;
         gridLabels = null;
         clockMinute = -1;
         updateClock();
@@ -745,7 +752,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (reorderAnim) tilesMoving |= stepReorder(dt, up);
         appsExpand.target = !shelf.isEmpty() && (zone == Z_SHELF || zone == Z_DRAWER || drawer.target > 0) ? 1 : 0;
         boolean expanding = appsExpand.step(dt);
-        if (expanding) {
+        boolean shelfMoving = shelfScroll.step(dt);
+        tilesMoving |= shelfMoving;
+        if (expanding || shelfMoving) {
             layoutShelf();
             tilesDirty = statusDirty = true;
             sky.invalidate();
@@ -931,17 +940,24 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /**
      * The apps row: at rest, small square icons; with focus on it, 16:9 cards the size of the titles' (the apps' TV
-     * art fills them). From the left margin, bottom-aligned, in between while the row grows.
+     * art fills them). From the left margin, bottom-aligned, in between while the row grows; scrolled sideways when
+     * the grown cards no longer fit (many pinned apps), so the focused one stays on screen.
      */
     private void layoutShelf() {
         int n = shelf.size();
         float e = appsExpand.value;
         float big = cardWide > 0 ? cardWide : 273 * k;
         float tw = lerp(L_ICON * k, big, e), th = lerp(L_ICON * k, L_CARD_H * k, e), gap = lerp(L_ICON_GAP * k, L_CARD_GAP * k, e);
-        float bottom = L_APPS_BOTTOM * k, x = MARGIN * k;
+        float step = tw + gap;
+        // The row's cards no longer fit when it grows: scroll so the focused app stays on screen (one in from the left,
+        // as the cards row does), and back to the margin when they fit again.
+        int shown = Math.max(1, (int) (((CONTENT_R - MARGIN) * k + gap) / step));
+        int last = Math.max(0, n - shown);
+        shelfScroll.target = Math.min(Math.max(0, Math.min(shelfIndex, n - 1) - 1), last);
+        float bottom = L_APPS_BOTTOM * k, x = MARGIN * k - shelfScroll.value * step;
         for (int i = 0; i < n; i++) {
             tileRects[i].set(x, bottom - th, x + tw, bottom);
-            x += tw + gap;
+            x += step;
         }
     }
 
@@ -1245,6 +1261,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         statusDirty |= snap || topChanged;
         heroDirty |= snap || heroChanged;
         drawerDirty |= snap || drawerChanged;
+        layoutShelf();   // the apps row scrolls sideways to keep the focused app on screen
         spoken.focusMoved();
         ambientCheck();
     }
@@ -2412,7 +2429,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 parts.add(Ui.time(show.start) + " – " + Ui.time(show.stop));
                 parts.add(Ui.trf("{n} min left", "n", Math.max(1, Math.round(p.left / 60_000f))));
             }
-            p.meta = String.join(" · ", parts);
+            p.meta = Ui.join(" · ", parts);
             out.add(p);
         }
         return out;
@@ -2759,32 +2776,56 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /**
      * With focus on the apps: the focused app's colors, a soft blurred glow over the photo (YouTube's red for
-     * TizenTube), coming in as the apps row grows.
+     * TizenTube), coming in as the apps row grows and cross-fading when the focus moves to another app.
      */
     private void drawAppGlow(Canvas c) {
         float e = appsExpand.value;
-        if (e < 0.01f || shelf.isEmpty() || zone != Z_SHELF && zone != Z_DRAWER) return;
+        if (e < 0.01f || shelf.isEmpty() || zone != Z_SHELF && zone != Z_DRAWER) {
+            glowing = false;
+            return;
+        }
         HomeApps.Item it = shelf.get(Math.min(shelfIndex, shelf.size() - 1));
+        long up = SystemClock.uptimeMillis();
+        if (!glowing) {
+            glowing = true;
+            glowItem = it;
+            glowFrom = null;
+            glowAt = 0;
+        } else if (it != glowItem) {
+            glowFrom = glowItem;
+            glowItem = it;
+            glowAt = up;
+        }
+        float f = glowAt == 0 ? 1 : Ui.smoothstep(0, GLOW_FADE_MS, up - glowAt);
+        if (f < 1) sky.postInvalidateOnAnimation();
+        drawGlow(c, glowFrom, e);
+        drawGlow(c, it, f >= 1 ? e : e * f);
+    }
+
+    /** One app's glow at [alpha]: its blurred TV card, or a gradient of its color. */
+    private void drawGlow(Canvas c, HomeApps.Item it, float alpha) {
+        if (it == null || alpha <= 0.002f) return;
         if (it.blur != null) {
             // Its TV card, tiny and blurred, over the whole screen (filtered up, it stays soft), darkened.
-            imagePaint.setAlpha(Math.round(255 * e));
+            imagePaint.setAlpha(Math.round(255 * alpha));
             c.drawBitmap(it.blur, null, screen, imagePaint);
             imagePaint.setAlpha(255);
             fill.setShader(null);
-            fill.setColor(Ui.alpha(0xFF000000, 0.35f * e));
+            fill.setColor(Ui.alpha(0xFF000000, 0.35f * alpha));
             c.drawRect(screen, fill);
             return;
         }
         int color = it.tint;
-        if (appGlow == null || appGlowColor != color) {
-            appGlowColor = color;
-            appGlow = new RadialGradient(w * 0.7f, h * 0.36f, w * 0.75f,
+        RadialGradient glow = appGlows.get(color);
+        if (glow == null) {
+            glow = new RadialGradient(w * 0.7f, h * 0.36f, w * 0.75f,
                     new int[] {Ui.blend(color, 0xFF0A0B0F, 0.25f), Ui.blend(color, 0xFF0A0B0F, 0.7f), 0xFF0A0B0F},
                     new float[] {0, 0.55f, 1}, Shader.TileMode.CLAMP);
+            appGlows.put(color, glow);
         }
-        fill.setShader(appGlow);
+        fill.setShader(glow);
         fill.setColor(0xFF000000);
-        fill.setAlpha(Math.round(255 * e));
+        fill.setAlpha(Math.round(255 * alpha));
         c.drawRect(screen, fill);
         fill.setAlpha(255);
         fill.setShader(null);

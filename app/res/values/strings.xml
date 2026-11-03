@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="fire_tv_service">Fire TV: opens Idiot Box when Amazon\'s home screen appears, and closes the Alexa overlay. It only watches which screen is in front.</string>
+    <string name="keeper_channel">Home screen</string>
+    <string name="keeper_title">Idiot Box</string>
+    <string name="keeper_text">Home stays on Idiot Box</string>
 </resources>

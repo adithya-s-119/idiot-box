@@ -42,6 +42,7 @@ public class SettingsActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Watchdog.install(this);
+        if (HomeMode.freeActive(this)) FireTvKeeper.start(this);
         Ui.init(this);
         view = new SettingsView(this);
         setContentView(view);

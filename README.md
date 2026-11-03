@@ -23,7 +23,7 @@ Open source. One button to go back to Amazon's.
 
 ## Install
 
-You need a Fire TV (Fire OS 7 or 8: Fire TV Stick, Stick 4K, Cube or a Fire TV Edition TV) and a computer on the same Wi-Fi.
+You need a Fire TV (Fire OS 6, 7 or 8: Fire TV Stick, Stick 4K, Cube or a Fire TV Edition TV) and a computer on the same Wi-Fi.
 
 1. **On the TV**, turn on developer options: Settings → My Fire TV → About → press the device name 7 times. Then
    Settings → My Fire TV → Developer options → turn on **ADB debugging**. Write down the TV's IP address (Settings →
@@ -51,8 +51,9 @@ You need a Fire TV (Fire OS 7 or 8: Fire TV Stick, Stick 4K, Cube or a Fire TV E
    tools/firetv.sh 192.168.1.50 setup
    ```
    It turns off Amazon's ad, promo and telemetry apps (only turned off, never uninstalled), turns on Idiot Box's
-   service (it opens Idiot Box whenever Amazon's home screen comes up, and closes the Alexa overlay), makes Idiot Box
-   the screensaver, and lets the music screensaver see what's playing.
+   home hook (an accessibility service on Fire OS 7 and 8; on Fire OS 6, which refuses third-party accessibility
+   services, it grants the app UsageStats instead), makes Idiot Box the screensaver, and lets the music screensaver
+   see what's playing. On Fire OS 7 and 8 the service also closes the Alexa overlay.
 6. **On the TV**, open *Idiot Box* → *Home Screen* → *Idiot Box*.
 
 For the Music tab, install a music app that shares its music, such as BitChord TV or [Prism](https://github.com/Yigder/Prism). Idiot Box uses whichever of those two is installed; to use another, pick it under Home Settings → Music provider.
@@ -100,9 +101,11 @@ XMLTV guides. It's your key: `config.properties` stays out of git.
 
 - **A plain Android app, no Gradle, no libraries.** [`build.sh`](build.sh) runs aapt2 → javac → d8 → zipalign →
   apksigner and makes an APK under 1 MB.
-- **Over Amazon's home screen, not instead of it.** Fire OS protects its launcher and ignores other home screens, so
-  an accessibility service ([`FireTvService`](app/src/io/idiotbox/FireTvService.java)) opens Idiot Box whenever
-  Amazon's home comes to the front, covering it at once so it never flashes.
+- **Over Amazon's home screen, not instead of it.** Fire OS protects its launcher and ignores other home screens.
+  On Fire OS 7 and 8 an accessibility service ([`FireTvService`](app/src/io/idiotbox/FireTvService.java)) opens
+  Idiot Box whenever Amazon's home comes to the front, covering it at once so it never flashes. Fire OS 6 refuses
+  third-party accessibility services, so there [`FireTvKeeper`](app/src/io/idiotbox/FireTvKeeper.java) watches the
+  foreground app through UsageStats and moves Idiot Box's task to the front.
 - **Drawn by hand on one Canvas**, at 60 fps on the stick's own chip.
 - **A safety net.** A watchdog in a separate process gives the Home button back to Amazon after three crashes in five
   minutes.
@@ -113,7 +116,8 @@ XMLTV guides. It's your key: `config.properties` stays out of git.
 |---|---|
 | [`HomeView.java`](app/src/io/idiotbox/HomeView.java) | The home screen |
 | [`HomeMode.java`](app/src/io/idiotbox/HomeMode.java) | Switching between Idiot Box and Original |
-| [`FireTvService.java`](app/src/io/idiotbox/FireTvService.java) | Opens Idiot Box over Amazon's home screen |
+| [`FireTvService.java`](app/src/io/idiotbox/FireTvService.java) | Opens Idiot Box over Amazon's home screen (Fire OS 7/8) |
+| [`FireTvKeeper.java`](app/src/io/idiotbox/FireTvKeeper.java) | Opens Idiot Box over Amazon's home screen (Fire OS 6) |
 | [`Recs.java`](app/src/io/idiotbox/Recs.java), [`TvPicks.java`](app/src/io/idiotbox/TvPicks.java) | The picks (TMDB, and the apps' own rows) |
 | [`Live.java`](app/src/io/idiotbox/Live.java), [`LiveSource.java`](app/src/io/idiotbox/LiveSource.java) | Live TV: playlists and guides |
 | [`MusicEngine.java`](app/src/io/idiotbox/MusicEngine.java) | The Music tab, through the music app (its media browser) |

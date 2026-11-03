@@ -7,11 +7,11 @@ import android.os.Build;
 import android.os.SystemClock;
 
 /**
- * Amazon Fire TV (Fire OS 7 and 8, Android 9 and 11; tested on a Fire TV Stick 3rd gen, AFTSSS). Fire OS protects
- * its launcher (pm disable-user refuses it) and ignores set-home-activity, so our home screen can't be the HOME
- * activity there.
- * Instead FireTvService opens it whenever Amazon's home screen comes to the front, and LiveTvActivity turns the
- * remote's Live TV button into a straight way home.
+ * Amazon Fire TV (Fire OS 6, 7 and 8, Android 7.1, 9 and 11; tested on a Fire TV Stick 3rd gen, AFTSSS, and an AFTMM
+ * on Fire OS 6.7.1.1). Fire OS protects its launcher (pm disable-user refuses it) and ignores set-home-activity, so our
+ * home screen can't be the HOME activity there. Instead FireTvService opens it whenever Amazon's home screen comes to
+ * the front, and LiveTvActivity turns the remote's Live TV button into a straight way home. Fire OS 6 refuses
+ * third-party accessibility services, so there FireTvKeeper does the same job through UsageStats and moveTaskToFront.
  */
 final class FireTv {
     private FireTv() {}

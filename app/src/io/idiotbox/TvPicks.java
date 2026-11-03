@@ -5,6 +5,7 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.media.tv.TvContract;
 import android.net.Uri;
+import android.os.Build;
 
 import org.json.JSONObject;
 
@@ -40,7 +41,8 @@ final class TvPicks {
 
     static List<Recs.Pick> load(Context c) {
         List<Recs.Pick> out = new ArrayList<>();
-        if (!allowed(c)) return out;
+        // Watch Next and preview channels are Android 8 (API 26); Fire OS 6 has only the old Programs table.
+        if (Build.VERSION.SDK_INT < 26 || !allowed(c)) return out;
         Set<String> seen = new HashSet<>();
         read(c, TvContract.WatchNextPrograms.CONTENT_URI,
                 TvContract.WatchNextPrograms.COLUMN_LAST_ENGAGEMENT_TIME_UTC_MILLIS + " DESC", MAX_WATCH_NEXT, true, seen, out);
@@ -141,7 +143,7 @@ final class TvPicks {
         if (!watchNext && parts.isEmpty() && description != null && !description.trim().isEmpty()) {
             parts.add(description.trim().replace(" - ", " · ").replaceAll("/10(\\.0)?$", ""));
         }
-        return String.join(" · ", parts);
+        return Ui.join(" · ", parts);
     }
 
     /** The app's name, or `fallback` when it isn't installed. */

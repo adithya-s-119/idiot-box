@@ -8,11 +8,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -82,7 +83,9 @@ final class SongLyrics {
             String lrc = null;
             try {
                 if (f.exists()) {
-                    lrc = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+                    try (InputStream in = new FileInputStream(f)) {
+                        lrc = Net.read(in);
+                    }
                 } else {
                     lrc = fetch(t);
                     //noinspection ResultOfMethodCallIgnored

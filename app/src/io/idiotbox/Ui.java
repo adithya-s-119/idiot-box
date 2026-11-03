@@ -37,7 +37,10 @@ import java.util.function.Supplier;
 final class Ui {
     private Ui() {}
 
-    /** Before Android 12: every Fire OS (7 is Android 9, 8 is Android 11), so always true on the TVs this app runs on. */
+    /**
+     * Before Android 12: every Fire OS (6 is Android 7.1, 7 is Android 9, 8 is Android 11), so always true on the TVs
+     * this app runs on.
+     */
     static final boolean LEGACY = Build.VERSION.SDK_INT < 31;
     /**
      * The language in use: "en" or one with a catalogue in assets/i18n (pt, es, de, fr, zh-CN…), picked in the settings
@@ -67,13 +70,37 @@ final class Ui {
     private static Typeface font(AssetManager a, boolean inter, int opticalSize, int weight) {
         if (inter) {
             try {
-                Typeface t = new Typeface.Builder(a, FONT)
-                        .setFontVariationSettings("'opsz' " + opticalSize + ", 'wght' " + weight).build();
+                Typeface t = variable(a, opticalSize, weight);
+                if (t == null) {
+                    // Fire OS 6 (Android 7.1) has no Typeface.Builder: the file's default instance, with a faked weight.
+                    t = Typeface.createFromAsset(a, FONT);
+                    if (weight != 400) t = weighted(t, weight);
+                }
                 if (t != null) return t;
             } catch (RuntimeException ignored) {
             }
         }
-        return Typeface.create(Typeface.DEFAULT, weight, false);
+        return weighted(Typeface.DEFAULT, weight);
+    }
+
+    /** Typeface.create(Typeface, int, boolean) is Android 9+: before that, fake the weight with the bold style. */
+    private static Typeface weighted(Typeface base, int weight) {
+        if (Build.VERSION.SDK_INT >= 28) return Typeface.create(base, weight, false);
+        return Typeface.create(base, weight >= 600 ? Typeface.BOLD : Typeface.NORMAL);
+    }
+
+    /** Inter with its variable axes (Android 8+); null on Fire OS 6, where the class doesn't exist. */
+    private static Typeface variable(AssetManager a, int opticalSize, int weight) {
+        if (Build.VERSION.SDK_INT < 26) return null;
+        try {
+            Class<?> builder = Class.forName("android.graphics.Typeface$Builder");
+            Object b = builder.getConstructor(AssetManager.class, String.class).newInstance(a, FONT);
+            builder.getMethod("setFontVariationSettings", String.class)
+                    .invoke(b, "'opsz' " + opticalSize + ", 'wght' " + weight);
+            return (Typeface) builder.getMethod("build").invoke(b);
+        } catch (Exception | LinkageError e) {
+            return null;
+        }
     }
 
     private static final String FONT = "fonts/InterVariable.ttf";
@@ -170,6 +197,18 @@ final class Ui {
         }
         String text = chosen != null ? chosen : other != null ? other : last;
         return text.replace("{n}", String.valueOf(n));
+    }
+
+    /** String.join, which Fire OS 6 (Android 7.1) doesn't have. */
+    static String join(String delimiter, Iterable<String> parts) {
+        StringBuilder b = new StringBuilder();
+        boolean first = true;
+        for (String part : parts) {
+            if (!first) b.append(delimiter);
+            first = false;
+            b.append(part);
+        }
+        return b.toString();
     }
 
     /** Dates and numbers in the current language (the TV's own country when it is in that language). */

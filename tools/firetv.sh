@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The Fire TV setup that only a computer can do, once (Fire OS's adbd never answers the TV itself, so the app can't):
-# Amazon's extra apps off, our accessibility service on (it opens our home screen over Amazon's), our screensaver,
-# music access for the screensaver, and the TV listings permission for the picks. `undo` puts it all back.
+# Amazon's extra apps off, our home hook on (accessibility on Fire OS 7/8; UsageStats on Fire OS 6, which refuses
+# third-party accessibility services), our screensaver, music access for the screensaver, and the TV listings
+# permission for the picks. `undo` puts it all back.
 #
 #   tools/firetv.sh <ip> setup    # after: adb install -r IdiotBox.apk
 #   tools/firetv.sh <ip> undo     # back to Amazon's own; then the app can be uninstalled cleanly
@@ -57,7 +58,32 @@ if [ "$ACTION" = setup ] && ! sh pm path "$PKG" | grep -q package:; then
   exit 1
 fi
 # Fire OS 8 (Android 11) runs the screensaver in the main process (ScreensaverAlone).
-if [ "$(sh getprop ro.build.version.sdk)" = 30 ]; then DREAM="$PKG/.ScreensaverAlone"; else DREAM="$PKG/.Screensaver"; fi
+SDK="$(sh getprop ro.build.version.sdk)"
+if [ "$SDK" = 30 ]; then DREAM="$PKG/.ScreensaverAlone"; else DREAM="$PKG/.Screensaver"; fi
+
+# Android 7.1 (Fire OS 6) has no `cmd notification`: there the listener lives in the secure setting, which the
+# notification service follows (it rebinds on the change).
+music_access() {
+  local cur kept
+  if [ "$1" = on ]; then
+    if [ "$SDK" -le 25 ]; then
+      cur="$(sh settings get secure enabled_notification_listeners)"
+      [ "$cur" = null ] && cur=
+      if tr ':' '\n' <<<"$cur" | grep -qx -e "$LISTENER"; then return 0; fi
+      sh settings put secure enabled_notification_listeners "${cur:+$cur:}$LISTENER"
+    else
+      sh cmd notification allow_listener "$LISTENER"
+    fi
+  elif [ "$SDK" -le 25 ]; then
+    cur="$(sh settings get secure enabled_notification_listeners)"
+    [ "$cur" = null ] && cur=
+    kept="$(tr ':' '\n' <<<"$cur" | grep -vx -e "$LISTENER" -e "$PKG/.NowPlaying" | grep -v '^$' | paste -sd: - || true)"
+    if [ -n "$kept" ]; then sh settings put secure enabled_notification_listeners "$kept"
+    else sh settings delete secure enabled_notification_listeners >/dev/null; fi
+  else
+    sh cmd notification disallow_listener "$LISTENER"
+  fi
+}
 
 installed="$(sh pm list packages | sed 's/^package://')"
 disabled="$(sh pm list packages -d | sed 's/^package://')"
@@ -79,9 +105,16 @@ case "$ACTION" in
       fi
     done
     rest="$(others)"
-    sh settings put secure enabled_accessibility_services "${rest:+$rest:}$SERVICE"
-    sh settings put secure accessibility_enabled 1
-    sh cmd notification allow_listener "$LISTENER"
+    if [ "$SDK" -le 27 ]; then
+      # Fire OS 6 refuses third-party accessibility services; FireTvKeeper reads the screen in front from UsageStats
+      # instead. It starts when the mode switches to Idiot Box (and at boot), and checks this grant on every poll, so
+      # granting it now is enough.
+      sh appops set "$PKG" GET_USAGE_STATS allow 2>/dev/null || true
+    else
+      sh settings put secure enabled_accessibility_services "${rest:+$rest:}$SERVICE"
+      sh settings put secure accessibility_enabled 1
+    fi
+    music_access on
     sh settings put secure screensaver_components "$DREAM"
     sh pm grant "$PKG" android.permission.READ_TV_LISTINGS 2>/dev/null || true
     echo "Done. On the TV: open Idiot Box > Home Screen > Idiot Box."
@@ -93,12 +126,15 @@ case "$ACTION" in
     rest="$(others)"
     if [ -n "$rest" ]; then sh settings put secure enabled_accessibility_services "$rest"
     else sh settings delete secure enabled_accessibility_services >/dev/null; fi
-    sh cmd notification disallow_listener "$LISTENER"
+    music_access off
+    sh appops set "$PKG" GET_USAGE_STATS default 2>/dev/null || true
     sh settings put secure screensaver_components "$AMAZON_DREAM"
     echo "Done: Amazon's apps, home screen and screensaver are back. To remove the app: adb uninstall $PKG"
     ;;
   status)
-    echo "accessibility: $(sh settings get secure enabled_accessibility_services)"
+    if [ "$SDK" -le 27 ]; then echo "accessibility: not used (Fire OS 6 uses UsageStats)"
+    else echo "accessibility: $(sh settings get secure enabled_accessibility_services)"; fi
+    echo "usage access:  $(sh appops get "$PKG" GET_USAGE_STATS 2>/dev/null)"
     echo "music access:  $(sh settings get secure enabled_notification_listeners)"
     echo "screensaver:   $(sh settings get secure screensaver_components)"
     off=0; for p in "${DEBLOAT[@]}"; do has "$p" "$disabled" && off=$((off + 1)); done

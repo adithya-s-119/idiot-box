@@ -3,6 +3,7 @@ package io.idiotbox;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -61,6 +62,7 @@ public class HomeActivity extends Activity {
             setContentView(t);
             return;
         }
+        if (HomeMode.freeActive(this)) FireTvKeeper.start(this);
         Ui.init(this);
         home = new HomeView(this);
         setContentView(home);
@@ -88,7 +90,8 @@ public class HomeActivity extends Activity {
     private static boolean askedTv;
 
     private void askForTvListings() {
-        if (askedTv || home == null || TvPicks.allowed(this)) return;
+        // Watch Next and preview channels are Android 8 (API 26); Fire OS 6 has nothing to read.
+        if (Build.VERSION.SDK_INT < 26 || askedTv || home == null || TvPicks.allowed(this)) return;
         askedTv = true;
         requestPermissions(TvPicks.PERMISSIONS, 1);
     }

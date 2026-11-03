@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 9+ (Fire OS 7/8): FireTvService opens the home screen; there is no boot keeper. -->
+<resources>
+    <bool name="keeper_boot">false</bool>
+</resources>

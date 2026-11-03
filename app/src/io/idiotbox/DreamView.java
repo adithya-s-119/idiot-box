@@ -5,7 +5,7 @@ import android.graphics.Camera;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.graphics.Rect;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.os.Handler;
@@ -16,6 +16,8 @@ import android.view.Choreographer;
 import android.view.View;
 
 import java.util.Calendar;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * The screensaver: a flip clock in the style of Fliqlo. Two dark tiles on black, the hours and the minutes in huge
@@ -39,11 +41,11 @@ final class DreamView extends View implements Choreographer.FrameCallback {
     private final Paint digits = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
     private final Paint label = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF[] tiles = {new RectF(), new RectF()};
-    private final Rect bounds = new Rect();
+    private final Map<String, Path> digitPaths = new HashMap<>();
     private final String[] shown = {"", ""}, previous = {"", ""};
     private final long[] flipAt = {0, 0};
     private String suffix = "";
-    private float k = 1, dx, dy, inkOffset;
+    private float k = 1, dx, dy;
     private boolean running;
 
     private final Runnable tick = new Runnable() {
@@ -85,9 +87,7 @@ final class DreamView extends View implements Choreographer.FrameCallback {
         k = Math.min(w / 1920f, h / 1080f);
         digits.setTextSize(DIGITS * k);
         label.setTextSize(LABEL * k);
-        // The digits' ink centered in the tile (the em box isn't): measured once on the tallest digits.
-        digits.getTextBounds("08", 0, 2, bounds);
-        inkOffset = -bounds.exactCenterY();
+        digitPaths.clear();   // their outlines were cut at the old size
         layoutTiles();
     }
 
@@ -169,8 +169,25 @@ final class DreamView extends View implements Choreographer.FrameCallback {
         c.clipRect(r.left, top ? r.top : hinge, r.right, top ? hinge : r.bottom);
         tile.setColor(top ? TOP : BOTTOM);
         c.drawRoundRect(r, radius, radius, tile);
-        c.drawText(text, r.centerX(), r.centerY() + inkOffset, digits);
+        // The digits as an outline, not with drawText: Skia's glyph cache gives up on these (760 px) on Fire OS 6,
+        // which draws nothing at all. The path has no such limit.
+        c.translate(r.centerX(), r.centerY());
+        c.drawPath(digitPath(text), digits);
         c.restore();
+    }
+
+    /** The digits of [text] as one outline, centered on (0, 0); made once per number. */
+    private Path digitPath(String text) {
+        Path p = digitPaths.get(text);
+        if (p == null) {
+            p = new Path();
+            digits.getTextPath(text, 0, text.length(), 0, 0, p);
+            RectF b = new RectF();
+            p.computeBounds(b, true);
+            p.offset(-b.centerX(), -b.centerY());
+            digitPaths.put(text, p);
+        }
+        return p;
     }
 
     /** A half turned `degrees` away from flat around the hinge (90: edge-on), darker the more it's turned. */

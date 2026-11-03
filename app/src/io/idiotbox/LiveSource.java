@@ -76,7 +76,7 @@ final class LiveSource {
 
     /** The playlists and guides as one string: live.json is made again when it changes (Live). */
     static String sources() {
-        return String.join("\n", Prefs.playlists()) + "\n\n" + String.join("\n", Prefs.guides());
+        return Ui.join("\n", Prefs.playlists()) + "\n\n" + Ui.join("\n", Prefs.guides());
     }
 
     /**

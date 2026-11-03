@@ -3,4 +3,6 @@
 <resources>
     <bool name="dream_in_home">true</bool>
     <bool name="dream_alone">false</bool>
+    <!-- Fire OS 6 (API 25) uses FireTvKeeper; Fire OS 7/8 use the accessibility service instead. -->
+    <bool name="keeper_boot">true</bool>
 </resources>

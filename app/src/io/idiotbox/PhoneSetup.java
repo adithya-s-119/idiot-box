@@ -252,11 +252,11 @@ final class PhoneSetup {
                 .append("<small>").append(esc(Ui.tr("Your city, for the weather."))).append("</small>")
                 .append("<label for=playlists>").append(esc(Ui.tr("Live TV channels"))).append("</label>")
                 .append("<textarea id=playlists name=playlists autocapitalize=off spellcheck=false>")
-                .append(esc(Prefs.ownPlaylists() ? String.join("\n", Prefs.playlists()) : "")).append("</textarea>")
+                .append(esc(Prefs.ownPlaylists() ? Ui.join("\n", Prefs.playlists()) : "")).append("</textarea>")
                 .append("<small>").append(esc(Ui.tr("One M3U link per line. Empty: the built-in channels."))).append("</small>")
                 .append("<label for=guides>").append(esc(Ui.tr("TV guide"))).append("</label>")
                 .append("<textarea id=guides name=guides autocapitalize=off spellcheck=false>")
-                .append(esc(Prefs.ownGuides() ? String.join("\n", Prefs.guides()) : "")).append("</textarea>")
+                .append(esc(Prefs.ownGuides() ? Ui.join("\n", Prefs.guides()) : "")).append("</textarea>")
                 .append("<small>").append(esc(Ui.tr("One XMLTV link per line. Empty: the built-in guide."))).append("</small>")
                 .append("<button>").append(esc(Ui.tr("Save"))).append("</button></form></main></body></html>");
         return h.toString();

@@ -23,6 +23,17 @@ final class Backdrop {
     static final int BG_W = ui(1280), BG_H = ui(720);
     /** The title's logo, sized by height for the hero: 110 tall, up to 900 wide (wide logos come out thinner). */
     static final int LOGO_W = ui(900), LOGO_H = ui(110);
+    /** Android 8+ keeps a bitmap on the GPU (the process doesn't hold its pixels); Fire OS 6 has no such config. */
+    static final Bitmap.Config HARDWARE = hardwareConfig();
+
+    private static Bitmap.Config hardwareConfig() {
+        if (android.os.Build.VERSION.SDK_INT < 26) return null;
+        try {
+            return (Bitmap.Config) Bitmap.Config.class.getField("HARDWARE").get(null);
+        } catch (Exception | LinkageError e) {
+            return null;
+        }
+    }
 
     private static float uiScale() {
         android.util.DisplayMetrics m = android.content.res.Resources.getSystem().getDisplayMetrics();
@@ -175,8 +186,8 @@ final class Backdrop {
 
     /** Copies it to GPU memory (cheap to draw; the process doesn't keep the pixels). A HARDWARE one is returned as is. */
     static Bitmap gpu(Bitmap b) {
-        if (b.getConfig() == Bitmap.Config.HARDWARE) return b;
-        Bitmap g = b.copy(Bitmap.Config.HARDWARE, false);
+        if (HARDWARE == null || b.getConfig() == HARDWARE) return b;
+        Bitmap g = b.copy(HARDWARE, false);
         if (g == null) return b;
         b.recycle();
         return g;

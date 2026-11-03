@@ -14,10 +14,10 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Original ⇄ Idiot Box, on Fire TV. Fire OS protects its launcher and its adbd never answers the device itself, so the
- * switch only records the mode, which FireTvService follows: in Idiot Box mode it opens our home screen whenever
- * Amazon's comes to the front. Turning that service on and Amazon's extra apps off is done once from a computer
- * (tools/firetv.sh). The switches run as background jobs (ModeJob) in the main process; the settings screen (the
- * :home process) asks for them and follows the state file.
+ * switch only records the mode, which FireTvService (Fire OS 7 and 8) and FireTvKeeper (Fire OS 6) follow: in Idiot
+ * Box mode they open our home screen whenever Amazon's comes to the front. Turning the service on and Amazon's extra
+ * apps off is done once from a computer (tools/firetv.sh). The switches run as background jobs (ModeJob) in the main
+ * process; the settings screen (the :home process) asks for them and follows the state file.
  */
 final class HomeMode {
     private HomeMode() {}
@@ -59,6 +59,7 @@ final class HomeMode {
             }
             addNotice(s, text);
             save(c, s);
+            if (free) FireTvKeeper.start(c); else FireTvKeeper.stop(c);
         }
     }
 
@@ -70,6 +71,7 @@ final class HomeMode {
             try { s.put("homeReverted", true); } catch (JSONException ignored) {}
             addNotice(s, Ui.tr("Idiot Box's home screen crashed 3 times in a row; I switched back to the original one."));
             save(app, s);
+            FireTvKeeper.stop(app);
         }
     }
 
