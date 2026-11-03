@@ -16,7 +16,7 @@ Open source. One button to go back to Amazon's.
 - **Picks, not promos.** Continue watching and fresh titles from what's trending, only from apps you already have.
 - **Live TV.** Channels from M3U playlists, with an XMLTV guide. The remote's Live TV button goes straight to Idiot Box.
 - **Music.** Home rows and search from your music app (BitChord TV, [Prism](https://github.com/Yigder/Prism) or another that shares its music), played through it.
-- **Weather, one press away.** The hour-by-hour forecast, sunrise and sunset.
+- **The weather and the time** at the top right, always in view.
 - **A screensaver to match**, and a music screensaver while something plays.
 - **Set up on the TV or from your phone.** Language, city, TMDB key, playlists and guides.
 - **Safe.** No root. Nothing is uninstalled. One button brings back Amazon's home screen.
@@ -107,7 +107,7 @@ XMLTV guides. It's your key: `config.properties` stays out of git.
 - **A safety net.** A watchdog in a separate process gives the Home button back to Amazon after three crashes in five
   minutes.
 - **Data** from TMDB (trending titles, new releases and which app streams what in your country), Open-Meteo
-  (forecast, sunrise and sunset) and, for the music screensaver, YouTube's covers and LRCLIB's timed lyrics.
+  (the weather) and, for the music screensaver, YouTube's covers and LRCLIB's timed lyrics.
 
 | File | What it is |
 |---|---|
